@@ -59,11 +59,11 @@ def with_rows(base, changes):
 SPOTS = {
     3: "....KWWSWWWK....",
     5: "...KWSWWWWWwK...",
-    7: "..KWWWWWWSWwK...",
+    7: "..KWWWWWWSWWwK..",
     8: "..KWWSWWWWWWwK..",
     9: "..KWWWWWWSWwwK..",
 }
-SPOTS[7] = "..KWWWWWWSWWwK.."
+CRACK = {**SPOTS, 5: "...KWSWKWWWwK...", 6: "..KWWWWKWKWWwK.."}
 STAGES = [
     ("Новое яйцо", "0 / 21 тепла", EGG),
     ("Потеплело", "6 / 21", with_rows(EGG, SPOTS)),
@@ -123,7 +123,7 @@ def main(out: str) -> None:
     p.drawText(
         QRect(24, 54, w, 26),
         Qt.AlignmentFlag.AlignLeft,
-        "Каждое сделанное направление — +1 тепла, закрытый день — ещё +1, «вместе» с другом — +1 обоим",
+        "Сделанное направление — +1 тепла, закрытый день — ещё +1, «вместе» с другом — +1 обоим",
     )
     for i, (title, warmth, rows) in enumerate(STAGES):
         image = art_to_image(rows, PALETTE)
