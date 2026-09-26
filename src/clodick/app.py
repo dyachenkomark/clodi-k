@@ -1,9 +1,9 @@
-"""Точка входа. Пока это консольная команда; окно с енотом появится на этапе 1.
+"""Точка входа.
 
-Примеры:
-    clodick              показать статус дня
-    clodick done sport   отметить спорт
-    clodick undo sport   снять отметку
+clodick              запустить енота на рабочем столе
+clodick status       статус дня в консоли
+clodick done sport   отметить спорт
+clodick undo sport   снять отметку
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from clodick.core.tracker import Tracker
 from clodick.logging_setup import setup_logging
 from clodick.storage.db import connect
 from clodick.storage.repository import CompletionRepository
+from clodick.storage.state import StateStore
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="clodick", description="cloDICK — задачи дня")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("status", help="показать статус дня (по умолчанию)")
+    sub.add_parser("status", help="показать статус дня")
     done = sub.add_parser("done", help="отметить направление выполненным")
     done.add_argument("key")
     undo = sub.add_parser("undo", help="снять отметку")
@@ -52,28 +53,48 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(paths.config_path())
     except ConfigError as exc:
-        print(f"Ошибка в настройках: {exc}", file=sys.stderr)
+        _error(f"Ошибка в настройках: {exc}")
         return 2
 
     conn = connect(paths.db_path())
     try:
         tracker = Tracker(config, CompletionRepository(conn))
-        try:
-            if args.command == "done":
-                if not tracker.mark_done(args.key, source="cli"):
-                    print("Уже отмечено сегодня.")
-                log.info("done %s", args.key)
-            elif args.command == "undo":
-                if not tracker.unmark(args.key):
-                    print("Отметки не было.")
-                log.info("undo %s", args.key)
-        except KeyError as exc:
-            print(exc.args[0], file=sys.stderr)
-            return 2
-        print(format_status(tracker.status()))
+        if args.command is None:
+            from clodick.desktop.main import run  # Qt грузим, только если нужно окно
+
+            return run(config, tracker, StateStore(conn))
+        return _run_cli(args, tracker)
     finally:
         conn.close()
+
+
+def _run_cli(args: argparse.Namespace, tracker: Tracker) -> int:
+    try:
+        if args.command == "done":
+            if not tracker.mark_done(args.key, source="cli"):
+                print("Уже отмечено сегодня.")
+            log.info("done %s", args.key)
+        elif args.command == "undo":
+            if not tracker.unmark(args.key):
+                print("Отметки не было.")
+            log.info("undo %s", args.key)
+    except KeyError as exc:
+        print(exc.args[0], file=sys.stderr)
+        return 2
+    print(format_status(tracker.status()))
     return 0
+
+
+def _error(message: str) -> None:
+    """Пишет ошибку в консоль, если она есть, и всегда в лог."""
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    log.error(message)
+
+
+def gui_main() -> int:
+    """Запуск без консольного окна на Windows."""
+    return main([])
 
 
 if __name__ == "__main__":

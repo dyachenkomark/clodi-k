@@ -17,6 +17,13 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX completions_day ON completions (day);
     """,
+    # 2: состояние интерфейса: позиция домика, переключатели из трея.
+    """
+    CREATE TABLE kv (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL  -- JSON
+    );
+    """,
 ]
 
 

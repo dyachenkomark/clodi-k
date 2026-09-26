@@ -21,6 +21,12 @@ daily_goal_minutes = 15
 # Время напоминаний, формат ЧЧ:ММ.
 reminders = ["10:00", "15:00", "20:00"]
 
+[desktop]
+# Размер пикселя енота на экране: 3 — мелко, 4 — обычно, 6 — крупно.
+scale = 4
+# Отпускать енота гулять вдоль края экрана.
+walks = true
+
 [[categories]]
 key = "sport"
 title = "Спорт"
@@ -42,11 +48,18 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class DesktopConfig:
+    scale: int = 4
+    walks: bool = True
+
+
+@dataclass(frozen=True)
 class Config:
     categories: tuple[Category, ...]
     day_start_hour: int = 4
     daily_goal_minutes: int = 15
     reminders: tuple[str, ...] = field(default_factory=tuple)
+    desktop: DesktopConfig = field(default_factory=DesktopConfig)
 
     def category(self, key: str) -> Category:
         for cat in self.categories:
@@ -99,7 +112,18 @@ def parse_config(raw: dict) -> Config:
         day_start_hour=day_start_hour,
         daily_goal_minutes=goal,
         reminders=reminders,
+        desktop=_parse_desktop(raw.get("desktop", {})),
     )
+
+
+def _parse_desktop(raw: dict) -> DesktopConfig:
+    scale = raw.get("scale", 4)
+    if not isinstance(scale, int) or not 1 <= scale <= 12:
+        raise ConfigError("desktop.scale должен быть целым числом от 1 до 12")
+    walks = raw.get("walks", True)
+    if not isinstance(walks, bool):
+        raise ConfigError("desktop.walks должен быть true или false")
+    return DesktopConfig(scale=scale, walks=walks)
 
 
 def _validate_hhmm(value: object) -> None:

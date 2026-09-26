@@ -2,7 +2,7 @@ from clodick.app import main
 
 
 def test_cli_flow(capsys):
-    assert main([]) == 0
+    assert main(["status"]) == 0
     assert "0/3" in capsys.readouterr().out
 
     assert main(["done", "sport"]) == 0

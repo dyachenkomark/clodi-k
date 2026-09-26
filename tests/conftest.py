@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import pytest
 
 from clodick.config import parse_config
@@ -15,6 +19,7 @@ def config():
     return parse_config(
         {
             "day_start_hour": 4,
+            "reminders": ["10:00", "20:00"],
             "categories": [
                 {"key": "sport", "title": "Спорт"},
                 {"key": "study", "title": "Учёба"},
