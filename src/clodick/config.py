@@ -6,6 +6,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clodick.characters import DEFAULT_CHARACTER
 from clodick.core.models import Category
 from clodick.desktop.themes import DEFAULT_THEME, THEMES
 
@@ -23,12 +24,14 @@ daily_goal_minutes = 15
 reminders = ["10:00", "15:00", "20:00"]
 
 [desktop]
-# Размер пикселя енота на экране: 3 — мелко, 4 — обычно, 6 — крупно.
+# Размер пикселя персонажа на экране: 3 — мелко, 4 — обычно, 6 — крупно.
 scale = 4
-# Отпускать енота гулять вдоль края экрана.
+# Отпускать персонажа гулять вдоль края экрана.
 walks = true
 # Оформление: classic, claude, claude_orange, claude_night.
 theme = "claude"
+# Персонаж. Свои персонажи кладите в папку characters рядом с этим файлом.
+character = "raccoon"
 
 [[categories]]
 key = "sport"
@@ -55,6 +58,7 @@ class DesktopConfig:
     scale: int = 4
     walks: bool = True
     theme: str = DEFAULT_THEME
+    character: str = DEFAULT_CHARACTER
 
 
 @dataclass(frozen=True)
@@ -130,7 +134,10 @@ def _parse_desktop(raw: dict) -> DesktopConfig:
     theme = raw.get("theme", DEFAULT_THEME)
     if theme not in THEMES:
         raise ConfigError(f"desktop.theme: неизвестная тема {theme!r}. Есть: {', '.join(THEMES)}")
-    return DesktopConfig(scale=scale, walks=walks, theme=theme)
+    character = raw.get("character", DEFAULT_CHARACTER)
+    if not isinstance(character, str) or not character:
+        raise ConfigError("desktop.character должен быть названием папки персонажа")
+    return DesktopConfig(scale=scale, walks=walks, theme=theme, character=character)
 
 
 def _validate_hhmm(value: object) -> None:

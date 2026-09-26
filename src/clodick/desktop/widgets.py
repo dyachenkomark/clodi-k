@@ -1,4 +1,4 @@
-"""Окна: домик, енот, пузырь с текстом, чек-лист дня."""
+"""Окна: домик, персонаж, пузырь с текстом, чек-лист дня."""
 
 from __future__ import annotations
 
@@ -133,13 +133,13 @@ class HouseWindow(SpriteWindow):
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
 
-class RaccoonWindow(SpriteWindow):
+class PetWindow(SpriteWindow):
     def __init__(self) -> None:
         super().__init__(draggable=False)
 
 
 class BubbleWindow(QWidget):
-    """Пузырь с репликой енота. Хвостик указывает вниз, на енота."""
+    """Пузырь с репликой персонажа. Хвостик указывает вниз, на него."""
 
     clicked = Signal()
 
@@ -180,7 +180,7 @@ class BubbleWindow(QWidget):
         self._hide_timer.start(int(seconds * 1000))
 
     def place_above(self, anchor: QRect, screen_rect: QRect) -> None:
-        """Ставит пузырь над anchor (окном енота), не вылезая за экран."""
+        """Ставит пузырь над anchor (окном персонажа), не вылезая за экран."""
         x = anchor.center().x() - self.width() // 2
         y = anchor.top() - self.height() + 2
         x = max(screen_rect.left(), min(x, screen_rect.right() - self.width()))

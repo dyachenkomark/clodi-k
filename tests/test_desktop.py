@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from clodick.core.reminders import DONE_TEXT
 from clodick.core.tracker import Tracker
 from clodick.desktop.brain import Mode
-from clodick.desktop.controller import RACCOON_HOME_OFFSET, DesktopApp
+from clodick.desktop.controller import DesktopApp
 from clodick.desktop.themes import THEMES
 from clodick.storage.state import StateStore
 
@@ -53,7 +53,7 @@ def make_desktop(qapp, config, repo):
 
     yield factory
     for desktop in created:
-        for window in (desktop.house, desktop.raccoon, desktop.bubble, desktop.checklist):
+        for window in (desktop.house, desktop.pet, desktop.bubble, desktop.checklist):
             window.close()
             window.deleteLater()
     qapp.processEvents()
@@ -62,10 +62,10 @@ def make_desktop(qapp, config, repo):
 def test_starts_with_house_and_raccoon(make_desktop):
     desktop, _, _ = make_desktop()
     assert desktop.house.isVisible()
-    assert desktop.raccoon.isVisible()
-    scale = desktop._scale
-    assert desktop.raccoon.x() == desktop.house.x() + RACCOON_HOME_OFFSET[0] * scale
-    assert desktop.raccoon.y() == desktop.house.y() + RACCOON_HOME_OFFSET[1] * scale
+    assert desktop.pet.isVisible()
+    dx, dy = desktop.home_offset
+    assert desktop.pet.x() == desktop.house.x() + dx
+    assert desktop.pet.y() == desktop.house.y() + dy
     assert desktop.house._ram == 42
 
 
@@ -113,7 +113,7 @@ def test_hide_and_show(make_desktop):
     desktop, _, _ = make_desktop()
     desktop.set_visible(False)
     assert not desktop.house.isVisible()
-    assert not desktop.raccoon.isVisible()
+    assert not desktop.pet.isVisible()
     desktop.set_visible(True)
     assert desktop.house.isVisible()
 
@@ -123,7 +123,7 @@ def test_house_position_is_remembered(make_desktop):
     first.house.move(100, 200)
     first.house.drag_moved.emit()
     first.house.drag_finished.emit()
-    assert first.raccoon.x() == 100 + RACCOON_HOME_OFFSET[0] * first._scale
+    assert first.pet.x() == 100 + first.home_offset[0]
 
     second, _, _ = make_desktop()
     assert (second.house.x(), second.house.y()) == (100, 200)
@@ -133,11 +133,11 @@ def test_walking_moves_window(make_desktop):
     desktop, _, _ = make_desktop()
     desktop.brain._walk_to(desktop.brain.x - 200)
     desktop.brain._outside = True
-    start = desktop.raccoon.x()
+    start = desktop.pet.x()
     for _ in range(10):
         desktop.brain.tick(0.1)
         desktop._after_brain_change()
-    assert desktop.raccoon.x() < start
+    assert desktop.pet.x() < start
 
 
 @pytest.mark.parametrize("theme", list(THEMES))
@@ -148,3 +148,62 @@ def test_every_theme_starts(make_desktop, theme):
     desktop.say("проверка")
     assert not desktop.house.grab().isNull()
     assert not desktop.checklist.grab().isNull()
+
+
+def _write_blob(folder):
+    folder.mkdir(parents=True)
+    frame = "'''\n.KK.\nKKKK\nKKKK\n.KK.\n'''"
+    animations = "\n".join(
+        f"[animations.{name}]\nframes = [{frame}]" for name in ("sit", "sleep", "wave", "walk")
+    )
+    (folder / "character.toml").write_text(
+        f'id = "blob"\nname = "Капля"\nsize = [4, 4]\n[palette]\nK = "#d97757"\n{animations}',
+        encoding="utf-8",
+    )
+
+
+def test_switch_character_at_runtime(make_desktop):
+    from clodick import paths
+
+    _write_blob(paths.data_dir() / "characters" / "blob")
+    desktop, _, _ = make_desktop()
+    assert "blob" in desktop.characters
+    desktop.set_character("blob")
+    assert desktop.character.id == "blob"
+    scale = desktop._scale
+    assert desktop.pet.size().width() == 4 * scale
+    assert desktop.pet.y() + desktop.pet.height() == desktop.house.y() + 30 * scale
+
+    again, _, _ = make_desktop()
+    assert again.character.id == "blob"
+
+
+def test_unknown_character_falls_back_to_raccoon(make_desktop):
+    desktop, _, _ = make_desktop()
+    desktop._state.set("character", "nobody")
+    again, _, _ = make_desktop()
+    assert again.character.id == "raccoon"
+
+
+def test_png_sheet_character(qapp, tmp_path):
+    from PySide6.QtGui import QColor, QImage
+
+    from clodick.characters import load_character
+    from clodick.desktop.sprites import SpriteBook
+
+    sheet = QImage(6, 3, QImage.Format.Format_ARGB32)
+    sheet.fill(QColor("#d97757"))
+    sheet.setPixelColor(3, 0, QColor("#141413"))
+    sheet.save(str(tmp_path / "all.png"))
+    blocks = "\n".join(
+        f'[animations.{name}]\nsheet = "all.png"\ncount = 2'
+        for name in ("sit", "sleep", "wave", "walk")
+    )
+    (tmp_path / "character.toml").write_text(f'id = "png"\nsize = [3, 3]\n{blocks}')
+
+    book = SpriteBook(2, character=load_character(tmp_path))
+    first = book.character_frame("walk", 0).toImage()
+    second = book.character_frame("walk", 1).toImage()
+    assert first.size().width() == 6
+    assert first.pixelColor(0, 0) == QColor("#d97757")
+    assert second.pixelColor(0, 0) == QColor("#141413")

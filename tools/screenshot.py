@@ -55,7 +55,7 @@ def main(out: str) -> None:
     canvas = QImage(screen.size(), QImage.Format.Format_ARGB32)
     canvas.fill(QColor(WALLPAPER.get(desktop.theme.key, "#3a6ea5")))
     painter = QPainter(canvas)
-    for window in (desktop.house, desktop.raccoon, desktop.bubble, desktop.checklist):
+    for window in (desktop.house, desktop.pet, desktop.bubble, desktop.checklist):
         if window.isVisible():
             painter.drawPixmap(window.pos(), window.grab())
 
@@ -65,7 +65,7 @@ def main(out: str) -> None:
     for mode in ("sit", "sleep", "wave", "walk"):
         for index in range(book.frame_count(mode)):
             for facing in (1, -1) if mode == "walk" else (1,):
-                pixmap = book.raccoon(mode, index, facing)
+                pixmap = book.pet(mode, index, facing)
                 painter.drawPixmap(x, 16, pixmap)
                 x += pixmap.width() + 12
     painter.end()

@@ -1,6 +1,6 @@
 """Точка входа.
 
-clodick              запустить енота на рабочем столе
+clodick              запустить персонажа на рабочем столе
 clodick status       статус дня в консоли
 clodick done sport   отметить спорт
 clodick undo sport   снять отметку
@@ -42,7 +42,7 @@ def format_status(status: DayStatus) -> str:
         mark = "[x]" if item.done else "[ ]"
         lines.append(f"  {mark} {item.category.title} ({item.category.key})")
     if status.all_done:
-        lines.append("Всё сделано, енот доволен.")
+        lines.append("Всё сделано!")
     return "\n".join(lines)
 
 

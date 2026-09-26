@@ -1,23 +1,11 @@
-import pytest
-
-from clodick.desktop.art import HOUSE, PALETTE, RACCOON
+from clodick.desktop.art import GROUND_ROW, HOUSE, PALETTE, YARD_X
 
 
-def all_frames():
-    for mode, frames in RACCOON.items():
-        for index, frame in enumerate(frames):
-            yield f"{mode}[{index}]", frame
-    yield "house", HOUSE
+def test_house_is_rectangular_and_uses_palette():
+    assert len({len(row) for row in HOUSE}) == 1
+    assert {ch for row in HOUSE for ch in row} <= PALETTE.keys()
 
 
-@pytest.mark.parametrize(("name", "rows"), list(all_frames()))
-def test_frame_is_rectangular_and_uses_palette(name, rows):
-    widths = {len(row) for row in rows}
-    assert len(widths) == 1, f"{name}: строки разной длины {widths}"
-    unknown = {ch for row in rows for ch in row} - PALETTE.keys()
-    assert not unknown, f"{name}: неизвестные цвета {unknown}"
-
-
-def test_raccoon_frames_same_size():
-    sizes = {(len(f[0]), len(f)) for frames in RACCOON.values() for f in frames}
-    assert len(sizes) == 1
+def test_yard_and_ground_inside_house_art():
+    assert 0 < YARD_X < len(HOUSE[0])
+    assert set(HOUSE[GROUND_ROW]) == {"L"}

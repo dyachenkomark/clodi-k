@@ -1,4 +1,4 @@
-"""Темы оформления: цвета пиксель-арта, чек-листа, пузыря и таблички.
+"""Темы оформления: цвета домика, чек-листа, пузыря и таблички.
 
 Тема выбирается в config.toml: [desktop] theme = "classic".
 Модуль без Qt, чтобы настройки могли проверять название темы.
@@ -18,7 +18,7 @@ SANS = "'Segoe UI', 'DejaVu Sans', sans-serif"
 class Theme:
     key: str
     title: str
-    # Цвета пиксель-арта поверх базовой палитры из art.py.
+    # Цвета домика поверх базовой палитры из art.py. Цвета персонажа — в его пакете.
     art: dict[str, str | None] = field(default_factory=dict)
     # Чек-лист.
     panel_bg: str = "#2b2d35"
@@ -66,12 +66,6 @@ THEMES: dict[str, Theme] = {
             title="Терракота",
             art={
                 "K": "#2a2926",
-                "G": "#a39e91",
-                "g": "#78736a",
-                "W": CREAM,
-                "M": INK,
-                "P": TERRACOTTA,
-                "Z": TERRACOTTA,
                 "R": TERRACOTTA,
                 "r": TERRACOTTA_DARK,
                 "B": PAPER,
@@ -104,12 +98,6 @@ THEMES: dict[str, Theme] = {
             title="Рыжий енот",
             art={
                 "K": INK,
-                "G": TERRACOTTA,
-                "g": TERRACOTTA_DARK,
-                "W": CREAM,
-                "M": INK,
-                "P": CREAM,
-                "Z": TERRACOTTA,
                 "R": INK_SOFT,
                 "r": INK,
                 "B": PAPER,
@@ -142,12 +130,6 @@ THEMES: dict[str, Theme] = {
             title="Ночь",
             art={
                 "K": "#0f0f0e",
-                "G": "#8f8a80",
-                "g": "#625e57",
-                "W": PAPER,
-                "M": "#0f0f0e",
-                "P": TERRACOTTA,
-                "Z": "#f3c98b",
                 "R": "#8a4a35",
                 "r": "#5e3224",
                 "B": "#4a4642",

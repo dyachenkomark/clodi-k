@@ -1,4 +1,4 @@
-"""Связывает трекер, поведение енота, окна, напоминания и трей."""
+"""Связывает трекер, поведение персонажа, окна, напоминания и трей."""
 
 from __future__ import annotations
 
@@ -9,9 +9,11 @@ from collections.abc import Callable
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QPoint, QRect, QTimer
-from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from clodick import paths
+from clodick.characters import DEFAULT_CHARACTER, Character, builtin_dir, discover
 from clodick.config import Config
 from clodick.core.reminders import (
     DONE_TEXT,
@@ -21,16 +23,15 @@ from clodick.core.reminders import (
     reminder_text,
 )
 from clodick.core.tracker import Tracker
+from clodick.desktop.art import GROUND_ROW, YARD_X
 from clodick.desktop.brain import Bounds, Brain, Mode
-from clodick.desktop.sprites import HOUSE_SIZE, RACCOON_SIZE, SpriteBook
+from clodick.desktop.sprites import HOUSE_SIZE, SpriteBook
 from clodick.desktop.themes import THEMES
-from clodick.desktop.widgets import BubbleWindow, ChecklistPopup, HouseWindow, RaccoonWindow
+from clodick.desktop.widgets import BubbleWindow, ChecklistPopup, HouseWindow, PetWindow
 from clodick.storage.state import StateStore
 
 log = logging.getLogger(__name__)
 
-# Где сидит енот относительно домика, в пикселях арта: во дворе справа, лапами на траве.
-RACCOON_HOME_OFFSET = (36, 12)
 # Сколько длится кадр анимации, секунды. Для сидения первый кадр длится случайно 2.5–6 с.
 FRAME_SECONDS = {"sleep": 0.9, "wave": 0.3, "walk": 0.18}
 BLINK_SECONDS = 0.15
@@ -64,11 +65,12 @@ class DesktopApp(QObject):
         self._ram: int | None = None
 
         self.theme = THEMES[config.desktop.theme]
-        screen = QGuiApplication.primaryScreen()
-        self._book = SpriteBook(self._scale, screen.devicePixelRatio(), self.theme.palette)
+        self.characters = discover([builtin_dir(), paths.data_dir() / "characters"])
+        self.character = self._pick_character(state.get("character") or config.desktop.character)
+        self._book = self._make_book(self.character)
 
         self.house = HouseWindow(self._book.house(), self._scale, self.theme)
-        self.raccoon = RaccoonWindow()
+        self.pet = PetWindow()
         self.bubble = BubbleWindow(self.theme)
         self.checklist = ChecklistPopup(self.theme)
 
@@ -97,12 +99,12 @@ class DesktopApp(QObject):
         )
 
         self.house.clicked.connect(self.open_checklist)
-        self.raccoon.clicked.connect(self._raccoon_clicked)
+        self.pet.clicked.connect(self._pet_clicked)
         self.bubble.clicked.connect(self.open_checklist)
         self.house.drag_moved.connect(self._house_moved)
         self.house.drag_finished.connect(self._save_house_position)
         self.house.context_requested.connect(self._show_menu)
-        self.raccoon.context_requested.connect(self._show_menu)
+        self.pet.context_requested.connect(self._show_menu)
         self.checklist.toggled.connect(self._toggle)
 
         self.menu = self._build_menu()
@@ -138,7 +140,7 @@ class DesktopApp(QObject):
         if visible:
             self._show_windows()
         else:
-            for window in (self.house, self.raccoon, self.bubble, self.checklist):
+            for window in (self.house, self.pet, self.bubble, self.checklist):
                 window.hide()
         self._visible_action.setChecked(visible)
 
@@ -155,6 +157,41 @@ class DesktopApp(QObject):
 
     # --- реплики и чек-лист ---
 
+    @property
+    def home_offset(self) -> tuple[int, int]:
+        """Где стоит персонаж относительно домика, в логических пикселях."""
+        return (
+            YARD_X * self._scale,
+            (GROUND_ROW + 1 - self.character.height) * self._scale,
+        )
+
+    def set_character(self, character_id: str) -> None:
+        """Сменить персонажа на лету. Выбор запоминается."""
+        character = self._pick_character(character_id)
+        self._state.set("character", character.id)
+        self.character = character
+        self._book = self._make_book(character)
+        self._house_moved()
+        self._apply_frame(restart=True)
+        for action in self._character_actions.actions():
+            action.setChecked(action.data() == character.id)
+        log.info("персонаж: %s", character.id)
+
+    def _pick_character(self, character_id: str) -> Character:
+        if character_id in self.characters:
+            return self.characters[character_id]
+        log.warning("персонаж %r не найден, беру %s", character_id, DEFAULT_CHARACTER)
+        return self.characters[DEFAULT_CHARACTER]
+
+    def _make_book(self, character: Character) -> SpriteBook:
+        return SpriteBook(
+            self._scale,
+            QGuiApplication.primaryScreen().devicePixelRatio(),
+            character=character,
+            theme=self.theme.key,
+            house_palette=self.theme.palette,
+        )
+
     def say(self, text: str, seconds: float = 12.0) -> None:
         if not self.visible:
             if self.tray is not None:
@@ -168,7 +205,7 @@ class DesktopApp(QObject):
     def open_checklist(self) -> None:
         self.bubble.hide()
         self.checklist.set_status(self._tracker.status(), self._ram)
-        anchor = self.house.geometry().united(self.raccoon.geometry())
+        anchor = self.house.geometry().united(self.pet.geometry())
         self.checklist.open_near(anchor, self._screen_rect())
 
     def check_reminders_now(self) -> None:
@@ -202,12 +239,12 @@ class DesktopApp(QObject):
             log.info("напоминание: %s", text)
             self.say(text)
 
-    def _raccoon_clicked(self) -> None:
+    def _pet_clicked(self) -> None:
         self.brain.wake()
         self._after_brain_change()
         self.open_checklist()
 
-    # --- енот ---
+    # --- персонаж ---
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -216,7 +253,7 @@ class DesktopApp(QObject):
         self._after_brain_change()
 
     def _after_brain_change(self) -> None:
-        self._place_raccoon()
+        self._place_pet()
         restart = self.brain.mode is not self._shown_mode
         if restart or self.brain.facing != self._shown_facing:
             self._apply_frame(restart=restart)
@@ -231,7 +268,7 @@ class DesktopApp(QObject):
         self._shown_mode = mode
         self._shown_facing = self.brain.facing
         facing = self.brain.facing if mode is Mode.WALK else 1
-        self.raccoon.set_pixmap(self._book.raccoon(mode.value, self._frame_index, facing))
+        self.pet.set_pixmap(self._book.character_frame(mode.value, self._frame_index, facing))
         if restart:
             self._schedule_frame()
 
@@ -249,16 +286,16 @@ class DesktopApp(QObject):
             seconds = FRAME_SECONDS[mode]
         self._anim_timer.start(int(seconds * 1000))
 
-    def _place_raccoon(self) -> None:
-        y = self.house.y() + RACCOON_HOME_OFFSET[1] * self._scale
+    def _place_pet(self) -> None:
+        y = self.house.y() + self.home_offset[1]
         x = round(self.brain.x / self._scale) * self._scale
-        if self.raccoon.pos() != QPoint(x, y):
-            self.raccoon.move(x, y)
+        if self.pet.pos() != QPoint(x, y):
+            self.pet.move(x, y)
             if self.bubble.isVisible():
                 self._place_bubble()
 
     def _place_bubble(self) -> None:
-        self.bubble.place_above(self.raccoon.geometry(), self._screen_rect())
+        self.bubble.place_above(self.pet.geometry(), self._screen_rect())
 
     # --- домик ---
 
@@ -269,8 +306,8 @@ class DesktopApp(QObject):
 
     def _home_geometry(self) -> tuple[float, Bounds]:
         screen = self._screen_rect()
-        home_x = self.house.x() + RACCOON_HOME_OFFSET[0] * self._scale
-        width = RACCOON_SIZE[0] * self._scale
+        home_x = self.house.x() + self.home_offset[0]
+        width = self.character.width * self._scale
         return float(home_x), Bounds(screen.left(), screen.right() + 1 - width)
 
     def _screen_rect(self) -> QRect:
@@ -287,7 +324,7 @@ class DesktopApp(QObject):
                 self.house.move(point)
                 return
         area = QGuiApplication.primaryScreen().availableGeometry()
-        overhang = max(0, RACCOON_HOME_OFFSET[0] + RACCOON_SIZE[0] - HOUSE_SIZE[0]) * self._scale
+        overhang = max(0, YARD_X + self.character.width - HOUSE_SIZE[0]) * self._scale
         self.house.move(
             area.right() + 1 - self.house.width() - overhang - 24,
             area.bottom() + 1 - self.house.height(),
@@ -298,9 +335,9 @@ class DesktopApp(QObject):
 
     def _show_windows(self) -> None:
         self.house.show()
-        self._place_raccoon()
-        self.raccoon.show()
-        self.raccoon.raise_()
+        self._place_pet()
+        self.pet.show()
+        self.pet.raise_()
 
     def _refresh_ram(self) -> None:
         try:
@@ -316,7 +353,16 @@ class DesktopApp(QObject):
         menu = QMenu()
         menu.addAction("Чек-лист дня", self.open_checklist)
         menu.addSeparator()
-        self._visible_action = QAction("Показывать енота", menu, checkable=True)
+        self._character_actions = QActionGroup(menu)
+        characters_menu = menu.addMenu("Персонаж")
+        for character in sorted(self.characters.values(), key=lambda c: c.name):
+            action = QAction(character.name, characters_menu, checkable=True)
+            action.setData(character.id)
+            action.setChecked(character.id == self.character.id)
+            action.triggered.connect(lambda _=False, cid=character.id: self.set_character(cid))
+            self._character_actions.addAction(action)
+            characters_menu.addAction(action)
+        self._visible_action = QAction("Показывать персонажа", menu, checkable=True)
         self._visible_action.setChecked(not self._state.get("hidden", False))
         self._visible_action.toggled.connect(self.set_visible)
         self._walks_action = QAction("Отпускать гулять", menu, checkable=True)

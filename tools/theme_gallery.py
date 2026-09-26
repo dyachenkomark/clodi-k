@@ -24,7 +24,7 @@ from clodick import paths
 from clodick.config import load_config
 from clodick.core.tracker import Tracker
 from clodick.desktop.brain import Mode
-from clodick.desktop.controller import RACCOON_HOME_OFFSET, DesktopApp
+from clodick.desktop.controller import DesktopApp
 from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import make_font
 from clodick.storage.db import connect
@@ -73,23 +73,22 @@ def render_tile(app, config, conn, theme_key: str) -> QImage:
     p.drawText(QRect(20, 42, 400, 20), Qt.AlignmentFlag.AlignLeft, f'theme = "{theme_key}"')
 
     house = desktop.house.grab()
-    raccoon = desktop.raccoon.grab()
+    raccoon = desktop.pet.grab()
     bubble = desktop.bubble.grab()
     checklist = desktop.checklist.grab()
-    scale = desktop._scale
 
     hx = TILE_W - house.width() - 20
     hy = TILE_H - house.height() - 10
     p.drawPixmap(hx, hy, house)
-    rx = hx + RACCOON_HOME_OFFSET[0] * scale
-    ry = hy + RACCOON_HOME_OFFSET[1] * scale
+    rx = hx + desktop.home_offset[0]
+    ry = hy + desktop.home_offset[1]
     p.drawPixmap(rx, ry, raccoon)
     bx = min(rx + raccoon.width() // 2 - bubble.width() // 2, TILE_W - bubble.width() - 8)
     p.drawPixmap(bx, ry - bubble.height() + 2, bubble)
     p.drawPixmap(20, TILE_H - checklist.height() - 14, checklist)
     p.end()
 
-    for window in (desktop.house, desktop.raccoon, desktop.bubble, desktop.checklist):
+    for window in (desktop.house, desktop.pet, desktop.bubble, desktop.checklist):
         window.close()
     return tile
 
