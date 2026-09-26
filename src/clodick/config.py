@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clodick.core.models import Category
+from clodick.desktop.themes import DEFAULT_THEME, THEMES
 
 DEFAULT_CONFIG = """\
 # Настройки cloDICK. Файл можно править руками, изменения применяются после перезапуска.
@@ -26,6 +27,8 @@ reminders = ["10:00", "15:00", "20:00"]
 scale = 4
 # Отпускать енота гулять вдоль края экрана.
 walks = true
+# Оформление: classic, claude, claude_orange, claude_night.
+theme = "classic"
 
 [[categories]]
 key = "sport"
@@ -51,6 +54,7 @@ class ConfigError(ValueError):
 class DesktopConfig:
     scale: int = 4
     walks: bool = True
+    theme: str = DEFAULT_THEME
 
 
 @dataclass(frozen=True)
@@ -123,7 +127,10 @@ def _parse_desktop(raw: dict) -> DesktopConfig:
     walks = raw.get("walks", True)
     if not isinstance(walks, bool):
         raise ConfigError("desktop.walks должен быть true или false")
-    return DesktopConfig(scale=scale, walks=walks)
+    theme = raw.get("theme", DEFAULT_THEME)
+    if theme not in THEMES:
+        raise ConfigError(f"desktop.theme: неизвестная тема {theme!r}. Есть: {', '.join(THEMES)}")
+    return DesktopConfig(scale=scale, walks=walks, theme=theme)
 
 
 def _validate_hhmm(value: object) -> None:

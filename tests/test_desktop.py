@@ -1,3 +1,4 @@
+import dataclasses
 import random
 from datetime import datetime
 
@@ -11,6 +12,7 @@ from clodick.core.reminders import DONE_TEXT
 from clodick.core.tracker import Tracker
 from clodick.desktop.brain import Mode
 from clodick.desktop.controller import RACCOON_HOME_OFFSET, DesktopApp
+from clodick.desktop.themes import THEMES
 from clodick.storage.state import StateStore
 
 
@@ -32,12 +34,13 @@ def make_desktop(qapp, config, repo):
     created = []
     state = StateStore(repo._conn)
 
-    def factory(clock=None):
+    def factory(clock=None, theme="classic"):
         clock = clock or Clock(datetime(2026, 9, 26, 9, 0))
-        tracker = Tracker(config, repo, clock=clock)
+        cfg = dataclasses.replace(config, desktop=dataclasses.replace(config.desktop, theme=theme))
+        tracker = Tracker(cfg, repo, clock=clock)
         desktop = DesktopApp(
             qapp,
-            config,
+            cfg,
             tracker,
             state,
             ram_reader=lambda: 42,
@@ -135,3 +138,13 @@ def test_walking_moves_window(make_desktop):
         desktop.brain.tick(0.1)
         desktop._after_brain_change()
     assert desktop.raccoon.x() < start
+
+
+@pytest.mark.parametrize("theme", list(THEMES))
+def test_every_theme_starts(make_desktop, theme):
+    desktop, _, _ = make_desktop(theme=theme)
+    assert desktop.theme.key == theme
+    desktop.open_checklist()
+    desktop.say("проверка")
+    assert not desktop.house.grab().isNull()
+    assert not desktop.checklist.grab().isNull()

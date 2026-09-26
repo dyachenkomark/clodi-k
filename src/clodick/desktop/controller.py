@@ -23,6 +23,7 @@ from clodick.core.reminders import (
 from clodick.core.tracker import Tracker
 from clodick.desktop.brain import Bounds, Brain, Mode
 from clodick.desktop.sprites import HOUSE_SIZE, RACCOON_SIZE, SpriteBook
+from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import BubbleWindow, ChecklistPopup, HouseWindow, RaccoonWindow
 from clodick.storage.state import StateStore
 
@@ -62,13 +63,14 @@ class DesktopApp(QObject):
         self._scale = config.desktop.scale
         self._ram: int | None = None
 
+        self.theme = THEMES[config.desktop.theme]
         screen = QGuiApplication.primaryScreen()
-        self._book = SpriteBook(self._scale, screen.devicePixelRatio())
+        self._book = SpriteBook(self._scale, screen.devicePixelRatio(), self.theme.palette)
 
-        self.house = HouseWindow(self._book.house(), self._scale)
+        self.house = HouseWindow(self._book.house(), self._scale, self.theme)
         self.raccoon = RaccoonWindow()
-        self.bubble = BubbleWindow()
-        self.checklist = ChecklistPopup()
+        self.bubble = BubbleWindow(self.theme)
+        self.checklist = ChecklistPopup(self.theme)
 
         self._restore_house_position()
         home_x, bounds = self._home_geometry()

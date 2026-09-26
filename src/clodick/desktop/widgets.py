@@ -7,6 +7,21 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from clodick.core.models import DayStatus
+from clodick.desktop.themes import THEMES, Theme
+
+
+def font_families(css: str) -> list[str]:
+    """'Georgia, "DejaVu Serif", serif' → ['Georgia', 'DejaVu Serif', 'serif']."""
+    return [name.strip().strip("'\"") for name in css.split(",") if name.strip()]
+
+
+def make_font(css: str, pixel_size: int, *, bold: bool = False) -> QFont:
+    font = QFont()
+    font.setFamilies(font_families(css))
+    font.setPixelSize(pixel_size)
+    font.setBold(bold)
+    return font
+
 
 OVERLAY_FLAGS = (
     Qt.WindowType.FramelessWindowHint
@@ -84,9 +99,10 @@ class SpriteWindow(QWidget):
 class HouseWindow(SpriteWindow):
     """Домик с табличкой, на которой написана загрузка RAM."""
 
-    def __init__(self, pixmap: QPixmap, scale: int) -> None:
+    def __init__(self, pixmap: QPixmap, scale: int, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(draggable=True)
         self._scale = scale
+        self._theme = theme
         self._ram: int | None = None
         self.set_pixmap(pixmap)
 
@@ -101,8 +117,8 @@ class HouseWindow(SpriteWindow):
         x, y, w, h = (v * self._scale for v in RAM_SIGN)
         rect = QRect(x, y, w, h)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#26262e"), max(1, self._scale // 2)))
-        painter.setBrush(QColor("#3b2a1f"))
+        painter.setPen(QPen(QColor(self._theme.sign_border), max(1, self._scale // 2)))
+        painter.setBrush(QColor(self._theme.sign_bg))
         painter.drawRoundedRect(rect, self._scale, self._scale)
         text = f"RAM {self._ram}%"
         font = QFont()
@@ -113,7 +129,7 @@ class HouseWindow(SpriteWindow):
             size -= 1
             font.setPixelSize(size)
         painter.setFont(font)
-        painter.setPen(QColor("#f2d16b"))
+        painter.setPen(QColor(self._theme.sign_text))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
 
@@ -131,13 +147,13 @@ class BubbleWindow(QWidget):
     PADDING = 10
     TAIL = 8
 
-    def __init__(self) -> None:
+    def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, OVERLAY_FLAGS)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._theme = theme
         self._text = ""
-        self._font = QFont()
-        self._font.setPixelSize(13)
+        self._font = make_font(theme.body_font, 14)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
@@ -176,7 +192,8 @@ class BubbleWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         body = QRectF(1, 1, self.width() - 2, self.height() - self.TAIL - 2)
         path = QPainterPath()
-        path.addRoundedRect(body, 8, 8)
+        radius = min(self._theme.radius, 12)
+        path.addRoundedRect(body, radius, radius)
         tail = QPainterPath()
         cx = self.width() / 2
         tail.moveTo(cx - self.TAIL, body.bottom() - 1)
@@ -184,11 +201,11 @@ class BubbleWindow(QWidget):
         tail.lineTo(cx + self.TAIL, body.bottom() - 1)
         tail.closeSubpath()
         path = path.united(tail)
-        painter.setPen(QPen(QColor("#26262e"), 2))
-        painter.setBrush(QColor("#fbfaf6"))
+        painter.setPen(QPen(QColor(self._theme.bubble_border), 2))
+        painter.setBrush(QColor(self._theme.bubble_bg))
         painter.drawPath(path)
         painter.setFont(self._font)
-        painter.setPen(QColor("#26262e"))
+        painter.setPen(QColor(self._theme.bubble_text))
         text_rect = body.adjusted(self.PADDING, self.PADDING, -self.PADDING, -self.PADDING)
         painter.drawText(text_rect, Qt.TextFlag.TextWordWrap, self._text)
 
@@ -198,20 +215,30 @@ class BubbleWindow(QWidget):
             self.clicked.emit()
 
 
-CHECKLIST_STYLE = """
-#panel { background: #2b2d35; border: 2px solid #16161b; border-radius: 10px; }
-QLabel { color: #ecebef; font-size: 13px; }
-QLabel#title { font-weight: 600; font-size: 14px; }
-QLabel#progress { color: #f2d16b; font-weight: 700; font-size: 14px; }
-QLabel#footer { color: #8b909b; font-size: 11px; }
-QCheckBox { color: #ecebef; font-size: 14px; spacing: 9px; padding: 3px 0; }
-QCheckBox:checked { color: #8b909b; }
-QCheckBox::indicator {
-    width: 14px; height: 14px; border: 2px solid #8b909b; border-radius: 4px;
-    background: #1f2026;
-}
-QCheckBox::indicator:checked { background: #6fae4a; border-color: #6fae4a; }
-QCheckBox::indicator:hover { border-color: #ecebef; }
+def checklist_style(theme: Theme) -> str:
+    t = theme
+    return f"""
+#panel {{
+    background: {t.panel_bg}; border: 2px solid {t.panel_border};
+    border-radius: {t.radius}px;
+}}
+QLabel {{ color: {t.text}; font-size: 13px; font-family: {t.body_font}; }}
+QLabel#title {{ font-weight: 600; font-size: 16px; font-family: {t.title_font}; }}
+QLabel#progress {{
+    color: {t.progress}; font-weight: 700; font-size: 15px; font-family: {t.title_font};
+}}
+QLabel#footer {{ color: {t.muted}; font-size: 11px; }}
+QCheckBox {{
+    color: {t.text}; font-size: 14px; spacing: 9px; padding: 3px 0;
+    font-family: {t.body_font};
+}}
+QCheckBox:checked {{ color: {t.muted}; }}
+QCheckBox::indicator {{
+    width: 14px; height: 14px; border: 2px solid {t.muted}; border-radius: 4px;
+    background: {t.box_bg};
+}}
+QCheckBox::indicator:checked {{ background: {t.accent}; border-color: {t.accent}; }}
+QCheckBox::indicator:hover {{ border-color: {t.text}; }}
 """
 
 
@@ -220,10 +247,10 @@ class ChecklistPopup(QWidget):
 
     toggled = Signal(str, bool)
 
-    def __init__(self) -> None:
+    def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setStyleSheet(CHECKLIST_STYLE)
+        self.setStyleSheet(checklist_style(theme))
         panel = QFrame(self)
         panel.setObjectName("panel")
         outer = QVBoxLayout(self)
