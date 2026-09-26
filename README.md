@@ -37,7 +37,7 @@ uv run clodick undo sport
 
 ## Оформление
 
-Четыре темы, выбираются в `config.toml`: `[desktop] theme = "..."`.
+Четыре темы, выбираются в `config.toml`: `[desktop] theme = "..."`. По умолчанию `claude` — «Терракота».
 
 ![Темы оформления](docs/themes.png)
 

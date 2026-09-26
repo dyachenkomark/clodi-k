@@ -27,6 +27,13 @@ from clodick.storage.db import connect
 from clodick.storage.repository import CompletionRepository
 from clodick.storage.state import StateStore
 
+WALLPAPER = {
+    "classic": "#3a6ea5",
+    "claude": "#e6e1d4",
+    "claude_orange": "#ece8de",
+    "claude_night": "#1b1a19",
+}
+
 
 def main(out: str) -> None:
     app = QApplication([])
@@ -46,15 +53,14 @@ def main(out: str) -> None:
 
     screen = QGuiApplication.primaryScreen().geometry()
     canvas = QImage(screen.size(), QImage.Format.Format_ARGB32)
-    canvas.fill(QColor("#3a6ea5"))
+    canvas.fill(QColor(WALLPAPER.get(desktop.theme.key, "#3a6ea5")))
     painter = QPainter(canvas)
-    painter.fillRect(0, screen.height() - 40, screen.width(), 40, QColor("#1c1f26"))
     for window in (desktop.house, desktop.raccoon, desktop.bubble, desktop.checklist):
         if window.isVisible():
             painter.drawPixmap(window.pos(), window.grab())
 
     # Все кадры енота в ряд сверху — посмотреть анимации.
-    book = SpriteBook(4)
+    book = SpriteBook(4, palette=desktop.theme.palette)
     x = 16
     for mode in ("sit", "sleep", "wave", "walk"):
         for index in range(book.frame_count(mode)):

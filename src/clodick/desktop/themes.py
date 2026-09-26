@@ -178,4 +178,4 @@ THEMES: dict[str, Theme] = {
     )
 }
 
-DEFAULT_THEME = "classic"
+DEFAULT_THEME = "claude"

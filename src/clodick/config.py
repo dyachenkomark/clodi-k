@@ -28,7 +28,7 @@ scale = 4
 # Отпускать енота гулять вдоль края экрана.
 walks = true
 # Оформление: classic, claude, claude_orange, claude_night.
-theme = "classic"
+theme = "claude"
 
 [[categories]]
 key = "sport"
