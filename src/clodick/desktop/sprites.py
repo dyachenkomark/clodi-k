@@ -68,10 +68,14 @@ class SpriteBook:
         return self._cache[key]
 
     def icon_image(self, size: int = 64) -> QImage:
-        """Верхняя часть первого кадра — голова персонажа — для иконки в трее."""
+        """Верхняя половина первого кадра — голова персонажа — для иконки в трее.
+
+        Голова занимает три четверти квадрата, вокруг прозрачные поля: иконка
+        от края до края выглядит слишком крупной рядом с системными.
+        """
         frame = self._frame_image("sit", 0)
-        head = frame.copy(0, 0, frame.width(), max(1, frame.height() * 3 // 5))
-        side = max(head.width(), head.height())
+        head = frame.copy(0, 0, frame.width(), max(1, frame.height() // 2))
+        side = -(-max(head.width(), head.height()) * 4 // 3)
         square = QImage(side, side, QImage.Format.Format_ARGB32)
         square.fill(0)
         top = (side - head.height()) // 2
