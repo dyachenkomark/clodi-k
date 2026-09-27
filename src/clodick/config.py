@@ -25,7 +25,7 @@ reminders = ["10:00", "15:00", "20:00"]
 
 [desktop]
 # Размер пикселя персонажа на экране: 3 — мелко, 4 — обычно, 6 — крупно.
-scale = 4
+scale = 3
 # Отпускать персонажа гулять вдоль края экрана.
 walks = true
 # Оформление: classic, claude, claude_orange, claude_night.
@@ -55,7 +55,7 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class DesktopConfig:
-    scale: int = 4
+    scale: int = 3
     walks: bool = True
     theme: str = DEFAULT_THEME
     character: str = DEFAULT_CHARACTER
@@ -118,7 +118,7 @@ def parse_config(raw: dict) -> Config:
 
 
 def _parse_desktop(raw: dict) -> DesktopConfig:
-    scale = raw.get("scale", 4)
+    scale = raw.get("scale", 3)
     if not isinstance(scale, int) or not 1 <= scale <= 12:
         raise ConfigError("desktop.scale должен быть целым числом от 1 до 12")
     walks = raw.get("walks", True)

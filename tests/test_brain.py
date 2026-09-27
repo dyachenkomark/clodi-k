@@ -134,3 +134,54 @@ def test_place_makes_new_home_and_stops_walk():
     assert brain.mode is Mode.SIT
     run(brain, 1)
     assert brain.x == 300.0
+
+
+def test_dodge_runs_fast_then_goes_home():
+    brain = make_brain()
+    brain.dodge(600.0)
+    assert brain.mode is Mode.WALK
+    brain.tick(0.5)
+    assert brain.x > 500 + 40 * 0.5 * 2  # быстрее обычного шага
+    run(brain, 1)
+    assert brain.x == 600.0
+    assert not brain.at_home
+    run(brain, 30)
+    assert brain.at_home
+
+
+def test_dodge_is_clamped_to_screen():
+    brain = make_brain(home=990.0)
+    brain.dodge(2000.0)
+    run(brain, 5)
+    assert brain.x == 1000.0
+
+
+def test_sleepy_brain_sleeps_more():
+    awake = make_brain(rolls=[0.6])
+    awake._decide()
+    assert awake.mode is Mode.SIT
+
+    sleepy = make_brain(rolls=[0.6])
+    sleepy.sleepy = True
+    sleepy._decide()
+    assert sleepy.mode is Mode.SLEEP
+
+
+def test_fidgets_only_when_available():
+    plain = make_brain(rolls=[0.7])
+    plain._decide()
+    assert plain.mode is Mode.SIT
+
+    busy = make_brain(rolls=[0.7])
+    busy.fidgets = (Mode.WASH,)
+    busy._decide()
+    assert busy.mode is Mode.WASH
+    run(busy, 5)
+    assert busy.mode is Mode.SIT
+
+
+def test_act_does_not_interrupt_walk():
+    brain = make_brain()
+    brain._walk_to(100.0)
+    brain.act(Mode.EAT, 3.0)
+    assert brain.mode is Mode.WALK

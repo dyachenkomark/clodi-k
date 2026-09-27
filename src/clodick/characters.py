@@ -51,6 +51,9 @@ class Character:
     author: str = ""
     description: str = ""
     path: Path | None = None
+    # Где пузо в кадрах sit, sleep и wave: x, y, ширина, высота в пикселях арта.
+    # Там пишется загрузка RAM. Нет пуза — нет надписи.
+    belly: tuple[int, int, int, int] | None = None
 
     def palette_for(self, theme: str) -> dict[str, str | None]:
         """Палитра с учётом варианта под тему, если он есть."""
@@ -102,6 +105,20 @@ def load_character(folder: Path) -> Character:
     if missing:
         raise CharacterError(f"{where}: не хватает анимаций {missing}")
 
+    belly = raw.get("belly")
+    if belly is not None:
+        ok = isinstance(belly, list) and len(belly) == 4 and all(isinstance(v, int) for v in belly)
+        if not ok or not (
+            belly[0] >= 0
+            and belly[1] >= 0
+            and belly[2] > 0
+            and belly[3] > 0
+            and belly[0] + belly[2] <= width
+            and belly[1] + belly[3] <= height
+        ):
+            raise CharacterError(f"{where}: belly — [x, y, ширина, высота] внутри кадра")
+        belly = tuple(belly)
+
     return Character(
         id=char_id,
         name=str(raw.get("name", char_id)),
@@ -113,6 +130,7 @@ def load_character(folder: Path) -> Character:
         author=str(raw.get("author", "")),
         description=str(raw.get("description", "")),
         path=folder,
+        belly=belly,
     )
 
 

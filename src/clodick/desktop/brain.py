@@ -1,4 +1,4 @@
-"""Поведение персонажа: сидит, спит, машет, гуляет. Без Qt, чтобы легко тестировать.
+"""Поведение персонажа: сидит, спит, машет, гуляет, возится. Без Qt, чтобы легко тестировать.
 
 Координата x — левый край окна персонажа на экране, в логических пикселях.
 """
@@ -15,6 +15,14 @@ class Mode(Enum):
     SLEEP = "sleep"
     WAVE = "wave"
     WALK = "walk"
+    # Необязательные позы: есть не у каждого персонажа.
+    WASH = "wash"
+    STRETCH = "stretch"
+    EAT = "eat"
+
+
+# Чем персонаж может заняться сам, пока сидит.
+FIDGETS = (Mode.WASH, Mode.STRETCH)
 
 
 @dataclass(frozen=True)
@@ -31,6 +39,14 @@ SIT_OUTSIDE = (4.0, 10.0)
 SLEEP = (60.0, 180.0)
 WALK_CHANCE = 0.35
 SLEEP_CHANCE = 0.2
+# Ночью персонаж сонный: чаще спит, реже гуляет.
+NIGHT_WALK_CHANCE = 0.1
+NIGHT_SLEEP_CHANCE = 0.6
+# Во сколько раз быстрее обычного шага он отбегает от курсора.
+RUSH = 4.0
+# Шанс повозиться (потереть лапки, потянуться) и сколько это длится.
+FIDGET_CHANCE = 0.25
+FIDGET = (2.5, 4.0)
 
 
 class Brain:
@@ -42,17 +58,21 @@ class Brain:
         speed: float,
         walks: bool = True,
         rng: random.Random | None = None,
+        fidgets: tuple[Mode, ...] = (),
     ) -> None:
         self.home_x = home_x
         self.bounds = bounds
         self.speed = speed
         self.walks = walks
         self.rng = rng or random.Random()
+        self.fidgets = fidgets
         self.x = home_x
         self.mode = Mode.SIT
         self.facing = 1
         self._outside = False
         self._target: float | None = None
+        self._rush = False
+        self.sleepy = False
         self._timer = self._pick(SIT_AT_HOME)
 
     @property
@@ -92,6 +112,22 @@ class Brain:
         self.mode = Mode.WAVE
         self._timer = seconds
 
+    def dodge(self, target: float) -> None:
+        """Отбежать от курсора. Потом он посидит там и вернётся на место."""
+        target = min(max(target, self.bounds.left), self.bounds.right)
+        if target == self.x:
+            return
+        self._outside = True
+        self._walk_to(target)
+        self._rush = True
+
+    def act(self, mode: Mode, seconds: float) -> None:
+        """Заняться чем-то на месте: поесть, потянуться. Прогулка при этом прерывается."""
+        if self.mode is Mode.WALK:
+            return
+        self.mode = mode
+        self._timer = seconds
+
     def wake(self) -> None:
         if self.mode is Mode.SLEEP:
             self._sit()
@@ -112,15 +148,22 @@ class Brain:
 
     def _decide(self) -> None:
         roll = self.rng.random()
-        if self.walks and roll < WALK_CHANCE:
+        walk, sleep = (
+            (NIGHT_WALK_CHANCE, NIGHT_SLEEP_CHANCE) if self.sleepy else (WALK_CHANCE, SLEEP_CHANCE)
+        )
+        if self.walks and roll < walk:
             target = self._pick_walk_target()
             if target is not None:
                 self._outside = True
                 self._walk_to(target)
                 return
-        if roll < WALK_CHANCE + SLEEP_CHANCE:
+        if roll < walk + sleep:
             self.mode = Mode.SLEEP
             self._timer = self._pick(SLEEP)
+            return
+        if self.fidgets and roll < walk + sleep + FIDGET_CHANCE:
+            self.mode = self.rng.choice(self.fidgets)
+            self._timer = self._pick(FIDGET)
             return
         self._sit()
 
@@ -139,13 +182,14 @@ class Brain:
     def _walk_to(self, target: float) -> None:
         self.mode = Mode.WALK
         self._target = target
+        self._rush = False
         if target != self.x:
             self.facing = 1 if target > self.x else -1
 
     def _step(self, dt: float) -> None:
         assert self._target is not None
         distance = self._target - self.x
-        step = self.speed * dt
+        step = self.speed * dt * (RUSH if self._rush else 1.0)
         if abs(distance) <= step:
             self.x = self._target
             self._arrive()
@@ -154,6 +198,7 @@ class Brain:
 
     def _arrive(self) -> None:
         self._target = None
+        self._rush = False
         if self.x == self.home_x:
             self._outside = False
             self._sit()

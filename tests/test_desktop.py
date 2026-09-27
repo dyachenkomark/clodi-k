@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
 
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
 from clodick.core.reminders import DONE_TEXT
@@ -240,3 +241,112 @@ def test_add_and_remove_task_from_checklist(make_desktop):
     desktop.checklist.remove_buttons[key].click()
     assert key not in desktop.checklist.boxes
     assert tracker.status().total == 3
+
+
+class FakeCursor:
+    def __init__(self):
+        self.pos = QPoint(0, 0)
+
+    def __call__(self):
+        return self.pos
+
+
+@pytest.fixture
+def playful_desktop(qapp, config, repo):
+    state = StateStore(repo._conn)
+    cursor = FakeCursor()
+    desktop = DesktopApp(
+        qapp,
+        config,
+        Tracker(config, repo),
+        state,
+        ram_reader=lambda: 42,
+        rng=random.Random(3),
+        cursor=cursor,
+    )
+    desktop.start()
+    desktop._cursor_timer.stop()
+    yield desktop, cursor
+    for window in (desktop.pet, desktop.bubble, desktop.checklist):
+        window.close()
+        window.deleteLater()
+    qapp.processEvents()
+
+
+def test_ram_is_written_on_belly(playful_desktop):
+    desktop, _ = playful_desktop
+    assert desktop.pet.belly_text == "42%"
+    desktop.brain._walk_to(desktop.brain.x - 100)
+    desktop._apply_frame(restart=True)
+    assert desktop.pet.belly_text is None
+    desktop.brain._sit()
+    desktop._apply_frame(restart=True)
+    desktop.set_belly_ram(False)
+    assert desktop.pet.belly_text is None
+
+
+def test_fast_cursor_makes_raccoon_dodge(playful_desktop):
+    desktop, cursor = playful_desktop
+    center = desktop.pet.geometry().center()
+    cursor.pos = QPoint(center.x() - 300, center.y())
+    desktop._watch_cursor(now=10.0)
+    cursor.pos = center
+    desktop._watch_cursor(now=10.1)
+    assert desktop.brain.mode is Mode.WALK
+    assert not desktop.brain.at_home
+
+
+def test_slow_cursor_does_not_scare_and_pets(playful_desktop):
+    desktop, cursor = playful_desktop
+    center = desktop.pet.geometry().center()
+    cursor.pos = center
+    for step in range(20):
+        desktop._watch_cursor(now=10.0 + step * 0.1)
+    assert desktop.brain.at_home
+    assert desktop.pet.heart_visible
+
+
+def test_playful_off_stops_watching(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.set_playful(False)
+    assert not desktop._cursor_timer.isActive()
+    desktop.set_playful(True)
+    assert desktop._cursor_timer.isActive()
+
+
+def test_checking_a_task_makes_raccoon_hop(playful_desktop):
+    desktop, _ = playful_desktop
+    home_y = desktop.pet.y()
+    desktop.open_checklist()
+    desktop.checklist.boxes["sport"].setChecked(True)
+    assert desktop.pet.y() < home_y
+    for _ in range(10):
+        desktop._hop_step()
+    assert desktop.pet.y() == home_y
+
+
+def test_raccoon_has_extra_poses(playful_desktop):
+    desktop, _ = playful_desktop
+    assert set(desktop.brain.fidgets) == {Mode.WASH, Mode.STRETCH}
+
+
+def test_checking_a_task_gives_a_cookie(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.open_checklist()
+    desktop.checklist.boxes["study"].setChecked(True)
+    assert desktop.brain.mode is Mode.EAT
+    assert desktop.pet.belly_text is None
+
+
+def test_raccoon_looks_at_nearby_cursor(playful_desktop):
+    desktop, cursor = playful_desktop
+    rect = desktop.pet.geometry()
+    sit_frame = desktop.pet._pixmap.toImage()
+    cursor.pos = rect.center() + QPoint(-rect.width(), 0)
+    desktop._watch_cursor(now=10.0)
+    desktop._watch_cursor(now=12.0)
+    assert desktop._look == 0
+    assert desktop.pet._pixmap.toImage() != sit_frame
+    cursor.pos = rect.center() + QPoint(2000, 0)
+    desktop._watch_cursor(now=14.0)
+    assert desktop._look is None

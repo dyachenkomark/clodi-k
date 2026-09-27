@@ -40,10 +40,35 @@ OVERLAY_FLAGS = (
 )
 
 
+# Пиксельный шрифт 3×5 для надписи на пузе: цифры и знак процента.
+PIXEL_FONT = {
+    "0": ("111", "101", "101", "101", "111"),
+    "1": ("010", "110", "010", "010", "111"),
+    "2": ("111", "001", "111", "100", "111"),
+    "3": ("111", "001", "111", "001", "111"),
+    "4": ("101", "101", "111", "001", "001"),
+    "5": ("111", "100", "111", "001", "111"),
+    "6": ("111", "100", "111", "101", "111"),
+    "7": ("111", "001", "010", "010", "010"),
+    "8": ("111", "101", "111", "101", "111"),
+    "9": ("111", "101", "111", "001", "111"),
+    "%": ("101", "001", "010", "100", "101"),
+}
+
+# Сердечко над головой, когда персонажа гладят курсором.
+HEART = (".X.X.", "XXXXX", ".XXX.", "..X..")
+HEART_COLOR = "#e0525f"
+
+
+def pixel_text_width(text: str, pixel: int) -> int:
+    return (4 * len(text) - 1) * pixel
+
+
 class PetWindow(QWidget):
     """Прозрачное окно персонажа поверх всех окон.
 
     Клик — сигнал clicked, перетаскивание двигает окно и шлёт drag_moved.
+    Поверх кадра рисует надпись на пузе и сердечко.
     """
 
     clicked = Signal()
@@ -51,11 +76,17 @@ class PetWindow(QWidget):
     drag_moved = Signal()
     drag_finished = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, scale: int = 4) -> None:
         super().__init__(None, OVERLAY_FLAGS)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._scale = scale
         self._pixmap: QPixmap | None = None
+        self._belly_text: str | None = None
+        self._belly_rect = QRect()
+        self._belly_color = QColor("#26262e")
+        self.heart_visible = False
+        self._heart_timer = QTimer(self, singleShot=True, timeout=self._hide_heart)
         self._press: QPoint | None = None
         self._grab_offset = QPoint()
         self._dragging = False
@@ -65,10 +96,66 @@ class PetWindow(QWidget):
         self.setFixedSize(pixmap.deviceIndependentSize().toSize())
         self.update()
 
+    @property
+    def pressed(self) -> bool:
+        """Кнопка мыши зажата на персонаже: его тащат или вот-вот кликнут."""
+        return self._press is not None
+
+    @property
+    def belly_text(self) -> str | None:
+        return self._belly_text
+
+    def set_belly(
+        self, text: str | None, rect: QRect | None = None, color: str = "#26262e"
+    ) -> None:
+        """Надпись на пузе в прямоугольнике rect (логические пиксели окна). None — убрать."""
+        rect = rect or QRect()
+        if (text, rect, QColor(color)) == (self._belly_text, self._belly_rect, self._belly_color):
+            return
+        self._belly_text, self._belly_rect, self._belly_color = text, rect, QColor(color)
+        self.update()
+
+    def show_heart(self, seconds: float) -> None:
+        self.heart_visible = True
+        self._heart_timer.start(int(seconds * 1000))
+        self.update()
+
+    def _hide_heart(self) -> None:
+        self.heart_visible = False
+        self.update()
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         if self._pixmap is not None:
             painter.drawPixmap(0, 0, self._pixmap)
+        if self._belly_text:
+            self._paint_belly(painter)
+        if self.heart_visible:
+            left = self.width() - len(HEART[0]) * self._scale
+            self._paint_pixels(painter, HEART, left, 0, self._scale, QColor(HEART_COLOR))
+
+    def _paint_belly(self, painter: QPainter) -> None:
+        text, rect = self._belly_text, self._belly_rect
+        # Самый крупный пиксель шрифта, при котором надпись влезает в пузо.
+        pixel = self._scale
+        while pixel > 1 and (
+            pixel_text_width(text, pixel) > rect.width() or 5 * pixel > rect.height()
+        ):
+            pixel -= 1
+        x = rect.x() + (rect.width() - pixel_text_width(text, pixel)) // 2
+        y = rect.y() + (rect.height() - 5 * pixel) // 2
+        for char in text:
+            glyph = PIXEL_FONT.get(char)
+            if glyph:
+                self._paint_pixels(painter, glyph, x, y, pixel, self._belly_color)
+            x += 4 * pixel
+
+    @staticmethod
+    def _paint_pixels(painter, rows, left: int, top: int, pixel: int, color: QColor) -> None:
+        for dy, row in enumerate(rows):
+            for dx, cell in enumerate(row):
+                if cell not in ".0":
+                    painter.fillRect(left + dx * pixel, top + dy * pixel, pixel, pixel, color)
 
     def mousePressEvent(self, event) -> None:
         pos = event.globalPosition().toPoint()

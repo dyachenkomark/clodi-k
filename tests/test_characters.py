@@ -85,3 +85,13 @@ def test_invalid_packs_explain_the_problem(tmp_path, body, message):
     folder = write_pack(tmp_path / "bad", body)
     with pytest.raises(CharacterError, match=message):
         load_character(folder)
+
+
+def test_builtin_raccoon_has_belly():
+    raccoon = load_character(builtin_dir() / DEFAULT_CHARACTER)
+    assert raccoon.belly == (6, 11, 8, 4)
+
+
+def test_belly_must_fit_the_frame(tmp_path):
+    with pytest.raises(CharacterError, match="belly"):
+        load_character(minimal_pack(tmp_path / "blob", extra="belly = [1, 1, 5, 5]"))
