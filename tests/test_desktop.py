@@ -369,7 +369,14 @@ def test_dodge_catches_cursor_that_jumps_over_raccoon_between_polls(playful_desk
 
 @pytest.mark.parametrize(
     ("dx", "dy", "animation"),
-    [(0, 200, ("walk_down", 1)), (0, -200, ("walk_up", 1)), (-200, 0, ("walk", -1))],
+    [
+        (0, 200, ("walk_down", 1)),
+        (0, -200, ("walk_up", 1)),
+        (-200, 0, ("walk", -1)),
+        (200, 200, ("walk_down_right", 1)),
+        (-200, 200, ("walk_down_right", -1)),
+        (-200, -200, ("walk_up_right", -1)),
+    ],
 )
 def test_walk_animation_follows_direction(playful_desktop, dx, dy, animation):
     desktop, _ = playful_desktop
@@ -431,3 +438,10 @@ def test_pomodoro_survives_restart_and_can_be_stopped(make_desktop):
     second.checklist.stop_button.click()
     assert not second.pomodoro.active
     assert second.brain.walks
+
+
+def test_checklist_opens_above_raccoon_without_covering_it(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.start_focus("sport")
+    desktop.open_checklist()
+    assert desktop.checklist.geometry().bottom() < desktop.pet.geometry().top()

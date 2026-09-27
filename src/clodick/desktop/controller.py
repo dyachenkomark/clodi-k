@@ -25,7 +25,18 @@ from clodick.core.reminders import (
 )
 from clodick.core.tracker import Tracker
 from clodick.desktop.art import GROUND_ROW, YARD_X
-from clodick.desktop.brain import DOWN, FIDGETS, UP, Area, Brain, Mode
+from clodick.desktop.brain import (
+    DOWN,
+    DOWN_LEFT,
+    DOWN_RIGHT,
+    FIDGETS,
+    UP,
+    UP_LEFT,
+    UP_RIGHT,
+    Area,
+    Brain,
+    Mode,
+)
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import BOTTOM_PAD, BubbleWindow, ChecklistPopup, PetWindow
@@ -70,8 +81,15 @@ NIGHT_FROM, NIGHT_TO = 23, 6
 LOOK_RADIUS = 220
 # Сколько секунд енот грызёт печеньку за отмеченную задачу.
 EAT_SECONDS = 3.0
+# Какие кадры показывать на ходу по диагонали: (анимация, отражать ли).
+DIAGONALS = {
+    DOWN_RIGHT: ("walk_down_right", 1),
+    DOWN_LEFT: ("walk_down_right", -1),
+    UP_RIGHT: ("walk_up_right", 1),
+    UP_LEFT: ("walk_up_right", -1),
+}
 # В каких позах пузо видно спереди и на нём пишется RAM.
-BELLY_MODES = (Mode.SIT, Mode.SLEEP, Mode.WAVE)
+BELLY_MODES = (Mode.SIT, Mode.WAVE)
 
 
 def crosses(rect: QRect, start: QPoint, end: QPoint) -> bool:
@@ -442,7 +460,8 @@ class DesktopApp(QObject):
     def _animation(self) -> tuple[str, int]:
         """Какую анимацию показать сейчас и отражать ли её: (имя, 1 или -1).
 
-        На ходу к зрителю или от него берутся walk_down и walk_up, если они есть у персонажа.
+        На ходу берутся кадры своего направления: walk_down, walk_up, walk_down_right,
+        walk_up_right (влево — отражённые), если они есть у персонажа.
         Иначе обычный walk, повёрнутый туда, куда он шёл по горизонтали.
         """
         mode = self.brain.mode
@@ -451,6 +470,8 @@ class DesktopApp(QObject):
             facing = self.brain.facing
             if facing in (UP, DOWN) and f"walk_{facing}" in animations:
                 return f"walk_{facing}", 1
+            if facing in DIAGONALS and DIAGONALS[facing][0] in animations:
+                return DIAGONALS[facing]
             return "walk", self.brain.side
         if mode is Mode.SIT and self._look is not None and "look" in animations:
             return "look", 1

@@ -26,8 +26,10 @@ class Mode(Enum):
 # Чем персонаж может заняться сам, пока сидит.
 FIDGETS = (Mode.WASH, Mode.STRETCH)
 
-# Куда смотрит на ходу.
+# Куда смотрит на ходу: восемь направлений через 45°. Экран: y растёт вниз.
 RIGHT, LEFT, UP, DOWN = "right", "left", "up", "down"
+DOWN_RIGHT, DOWN_LEFT, UP_RIGHT, UP_LEFT = "down_right", "down_left", "up_right", "up_left"
+DIRECTIONS = (RIGHT, DOWN_RIGHT, DOWN, DOWN_LEFT, LEFT, UP_LEFT, UP, UP_RIGHT)
 
 
 @dataclass(frozen=True)
@@ -208,11 +210,10 @@ class Brain:
         dx, dy = x - self.x, y - self.y
         if dx:
             self.side = 1 if dx > 0 else -1
-        if abs(dx) >= abs(dy):
-            if dx:
-                self.facing = RIGHT if dx > 0 else LEFT
-        else:
-            self.facing = DOWN if dy > 0 else UP
+        if dx or dy:
+            # Ближайшее из восьми направлений: 30° и 60° — диагональ, 15° — вбок.
+            angle = math.degrees(math.atan2(dy, dx)) % 360
+            self.facing = DIRECTIONS[round(angle / 45) % 8]
 
     def _step(self, dt: float) -> None:
         assert self._target is not None

@@ -3,7 +3,18 @@ import random
 
 import pytest
 
-from clodick.desktop.brain import DOWN, LEFT, RIGHT, SIT_AT_HOME, UP, Area, Brain, Mode
+from clodick.desktop.brain import (
+    DOWN,
+    DOWN_RIGHT,
+    LEFT,
+    RIGHT,
+    SIT_AT_HOME,
+    UP,
+    UP_LEFT,
+    Area,
+    Brain,
+    Mode,
+)
 
 AREA = Area(0, 0, 1000, 800)
 
@@ -76,7 +87,17 @@ def test_walks_in_both_axes():
 
 @pytest.mark.parametrize(
     ("target", "facing"),
-    [((600, 400), RIGHT), ((400, 400), LEFT), ((500, 200), UP), ((510, 600), DOWN)],
+    [
+        ((600, 400), RIGHT),
+        ((400, 400), LEFT),
+        ((500, 200), UP),
+        ((510, 600), DOWN),
+        ((600, 500), DOWN_RIGHT),  # 45°
+        ((673, 500), DOWN_RIGHT),  # 30°
+        ((558, 500), DOWN_RIGHT),  # 60°
+        ((697, 453), RIGHT),  # 15°
+        ((400, 300), UP_LEFT),
+    ],
 )
 def test_facing_follows_main_direction(target, facing):
     brain = make_brain()

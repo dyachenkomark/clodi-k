@@ -460,7 +460,13 @@ class ChecklistPopup(QWidget):
         self.adjustSize()
 
     def open_near(self, anchor: QRect, screen_rect: QRect) -> None:
-        """Открывает над anchor, прижимая к краям экрана."""
+        """Открывает над anchor, прижимая к краям экрана.
+
+        Размер считается после show(): до показа Qt не знает окончательную раскладку,
+        и окно потом вырастает вниз, прямо на персонажа.
+        """
+        self.show()
+        self.layout().activate()
         self.adjustSize()
         x = anchor.center().x() - self.width() // 2
         y = anchor.top() - self.height() - 6
@@ -468,7 +474,6 @@ class ChecklistPopup(QWidget):
             y = anchor.bottom() + 6
         x = max(screen_rect.left(), min(x, screen_rect.right() - self.width()))
         self.move(x, y)
-        self.show()
         self.activateWindow()
 
     def _submit(self) -> None:

@@ -33,7 +33,7 @@ def minimal_pack(folder, char_id="blob", extra=""):
 def test_builtin_raccoon_is_valid():
     raccoon = load_character(builtin_dir() / DEFAULT_CHARACTER)
     assert raccoon.name == "Raccoon"
-    assert (raccoon.width, raccoon.height) == (22, 18)
+    assert (raccoon.width, raccoon.height) == (28, 20)
     for name in REQUIRED_ANIMATIONS:
         assert raccoon.animations[name].frame_count >= 1
 
@@ -89,7 +89,7 @@ def test_invalid_packs_explain_the_problem(tmp_path, body, message):
 
 def test_builtin_raccoon_has_belly():
     raccoon = load_character(builtin_dir() / DEFAULT_CHARACTER)
-    assert raccoon.belly == (6, 11, 8, 4)
+    assert raccoon.belly == (10, 13, 8, 4)
 
 
 def test_belly_must_fit_the_frame(tmp_path):
