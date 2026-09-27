@@ -37,3 +37,11 @@ def test_broken_toml_raises_config_error(tmp_path):
 def test_invalid_config(raw):
     with pytest.raises(ConfigError):
         parse_config(raw)
+
+
+def test_roam_is_validated():
+    base = {"categories": [{"key": "a", "title": "A"}]}
+    assert parse_config({**base, "desktop": {"roam": 5000}}).desktop.roam == 5000
+    assert parse_config(base).desktop.roam == 500
+    with pytest.raises(ConfigError, match="roam"):
+        parse_config({**base, "desktop": {"roam": -1}})

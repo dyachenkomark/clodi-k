@@ -24,10 +24,10 @@ from clodick.core.reminders import (
 )
 from clodick.core.tracker import Tracker
 from clodick.desktop.art import GROUND_ROW, YARD_X
-from clodick.desktop.brain import FIDGETS, Bounds, Brain, Mode
+from clodick.desktop.brain import DOWN, FIDGETS, UP, Area, Brain, Mode
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
-from clodick.desktop.widgets import BubbleWindow, ChecklistPopup, PetWindow
+from clodick.desktop.widgets import BOTTOM_PAD, BubbleWindow, ChecklistPopup, PetWindow
 from clodick.storage.state import StateStore
 
 log = logging.getLogger(__name__)
@@ -118,13 +118,14 @@ class DesktopApp(QObject):
         self.bubble = BubbleWindow(self.theme)
         self.checklist = ChecklistPopup(self.theme)
 
-        home_x, self._home_y = self._restore_position()
-        self.pet.move(home_x, self._home_y)
+        home = self._restore_position()
+        self._move_window(*home)
         self.brain = Brain(
-            float(home_x),
-            self._bounds(),
+            (float(home[0]), float(home[1])),
+            self._area(),
             speed=10.0 * self._scale,
             walks=bool(state.get("walks", config.desktop.walks)),
+            roam=float(config.desktop.roam),
             rng=rng,
             fidgets=self._fidgets(),
         )
@@ -143,7 +144,7 @@ class DesktopApp(QObject):
 
         self._frame_index = 0
         self._shown_mode: Mode | None = None
-        self._shown_facing = 1
+        self._shown_anim: tuple[str, int] | None = None
         self._last_tick = time.monotonic()
 
         self._anim_timer = QTimer(self, singleShot=True, timeout=self._next_frame)
@@ -237,13 +238,13 @@ class DesktopApp(QObject):
         character = self._pick_character(character_id)
         self._state.set("character", character.id)
         # Лапы остаются на том же уровне, даже если новый персонаж выше или ниже.
-        self._home_y += (self.character.height - character.height) * self._scale
+        dy = (self.character.height - character.height) * self._scale
         self.character = character
         self._book = self._make_book(character)
         self.brain.fidgets = self._fidgets()
-        if self.brain.mode.value not in character.animations:
-            self.brain.act(Mode.SIT, 1.0)
-        self.brain.set_home(self.brain.home_x, self._bounds())
+        hx, hy = self.brain.home
+        self.brain.place(hx, hy + dy)
+        self.brain.set_area(self._area())
         self._after_brain_change()
         self._save_position()
         self._apply_frame(restart=True)
@@ -348,30 +349,45 @@ class DesktopApp(QObject):
     def _after_brain_change(self) -> None:
         self._place_pet()
         restart = self.brain.mode is not self._shown_mode
-        if restart or self.brain.facing != self._shown_facing:
+        if restart or self._animation() != self._shown_anim:
             self._apply_frame(restart=restart)
         interval = ACTIVE_TICK_MS if self.brain.is_active else IDLE_TICK_MS
         if self._tick_timer.interval() != interval:
             self._tick_timer.setInterval(interval)
 
-    def _apply_frame(self, *, restart: bool) -> None:
+    def _animation(self) -> tuple[str, int]:
+        """Какую анимацию показать сейчас и отражать ли её: (имя, 1 или -1).
+
+        На ходу к зрителю или от него берутся walk_down и walk_up, если они есть у персонажа.
+        Иначе обычный walk, повёрнутый туда, куда он шёл по горизонтали.
+        """
         mode = self.brain.mode
+        animations = self.character.animations
+        if mode is Mode.WALK:
+            facing = self.brain.facing
+            if facing in (UP, DOWN) and f"walk_{facing}" in animations:
+                return f"walk_{facing}", 1
+            return "walk", self.brain.side
+        if mode is Mode.SIT and self._look is not None and "look" in animations:
+            return "look", 1
+        return mode.value, 1
+
+    def _apply_frame(self, *, restart: bool) -> None:
         if restart:
             self._frame_index = 0
-        self._shown_mode = mode
-        self._shown_facing = self.brain.facing
-        facing = self.brain.facing if mode is Mode.WALK else 1
-        if mode is Mode.SIT and self._look is not None and "look" in self.character.animations:
-            frame = self._book.character_frame("look", self._look)
-        else:
-            frame = self._book.character_frame(mode.value, self._frame_index, facing)
-        self.pet.set_pixmap(frame)
+        self._shown_mode = self.brain.mode
+        name, flip = self._shown_anim = self._animation()
+        index = self._look if name == "look" else self._frame_index % self._book.frame_count(name)
+        self.pet.set_pixmap(
+            self._book.character_frame(name, index, flip), self._book.feet(name, index, flip)
+        )
         self._update_belly()
         if restart:
             self._schedule_frame()
 
     def _next_frame(self) -> None:
-        count = self._book.frame_count(self.brain.mode.value)
+        name = self._animation()[0]
+        count = 2 if name == "look" else self._book.frame_count(name)
         self._frame_index = (self._frame_index + 1) % count
         self._apply_frame(restart=False)
         self._schedule_frame()
@@ -386,13 +402,21 @@ class DesktopApp(QObject):
 
     def _place_pet(self) -> None:
         # Шаги кратны пикселю арта, считая от его места: на месте он стоит ровно там, где поставили.
-        home = round(self.brain.home_x)
-        x = home + round((self.brain.x - home) / self._scale) * self._scale
-        y = self._home_y - (self._hop[0] if self._hop else 0) * self._scale
-        if self.pet.pos() != QPoint(x, y):
-            self.pet.move(x, y)
+        hx, hy = (round(v) for v in self.brain.home)
+        x = hx + round((self.brain.x - hx) / self._scale) * self._scale
+        y = hy + round((self.brain.y - hy) / self._scale) * self._scale
+        self.pet.set_lift(self._hop[0] if self._hop else 0)
+        if self._sprite_pos() != QPoint(x, y):
+            self._move_window(x, y)
             if self.bubble.isVisible():
                 self._place_bubble()
+
+    def _sprite_pos(self) -> QPoint:
+        """Левый верхний угол кадра на экране. Окно выше на запас под прыжок."""
+        return self.pet.pos() + QPoint(0, self.pet.sprite_offset)
+
+    def _move_window(self, x: int, y: int) -> None:
+        self.pet.move(x, y - self.pet.sprite_offset)
 
     def _place_bubble(self) -> None:
         self.bubble.place_above(self.pet.geometry(), self._screen_rect())
@@ -431,12 +455,14 @@ class DesktopApp(QObject):
             and crosses(rect.adjusted(-16, -16, 16, 16), last, pos)
         ):
             # Курсор будто толкает: енот отбегает туда, куда тот летел.
-            away = 1 if last.x() < rect.center().x() else -1
+            push = pos - last
+            length = max(1.0, (push.x() ** 2 + push.y() ** 2) ** 0.5)
             distance = rect.width() * 1.5
-            self.brain.dodge(self.brain.x + away * distance)
-            if self.brain.mode is not Mode.WALK:
-                # Уперся в край экрана — бежит в другую сторону.
-                self.brain.dodge(self.brain.x - away * distance)
+            dx, dy = push.x() / length * distance, push.y() / length * distance
+            x, y = self.brain.x, self.brain.y
+            if not self.brain.dodge(x + dx, y + dy):
+                # Упёрся в край экрана — бежит в другую сторону.
+                self.brain.dodge(x - dx, y - dy)
             self._dodge_ready = now + DODGE_COOLDOWN
             self._pet_since = None
             self._after_brain_change()
@@ -480,9 +506,9 @@ class DesktopApp(QObject):
 
     def _pet_dragged(self) -> None:
         """Енота тащат мышью: где окно, там и его место."""
-        self._home_y = self.pet.y()
-        self.brain.bounds = self._bounds()
-        self.brain.place(float(self.pet.x()))
+        pos = self._sprite_pos()
+        self.brain.area = self._area()
+        self.brain.place(float(pos.x()), float(pos.y()))
         self._after_brain_change()
         if self.bubble.isVisible():
             self._place_bubble()
@@ -490,12 +516,20 @@ class DesktopApp(QObject):
     def _pet_size(self) -> QSize:
         return QSize(self.character.width * self._scale, self.character.height * self._scale)
 
-    def _bounds(self) -> Bounds:
+    def _area(self) -> Area:
+        """Пол для персонажа: рабочая область экрана без панели задач. Тень тоже влезает."""
         screen = self._screen_rect()
-        return Bounds(screen.left(), screen.right() + 1 - self._pet_size().width())
+        size = self._pet_size()
+        shadow = BOTTOM_PAD * self._scale
+        return Area(
+            screen.left(),
+            screen.top(),
+            screen.right() + 1 - size.width(),
+            screen.bottom() + 1 - size.height() - shadow,
+        )
 
     def _screen_rect(self) -> QRect:
-        center = QRect(self.pet.pos(), self._pet_size()).center()
+        center = QRect(self._sprite_pos(), self._pet_size()).center()
         screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
         return screen.availableGeometry()
 
@@ -516,11 +550,11 @@ class DesktopApp(QObject):
         area = QGuiApplication.primaryScreen().availableGeometry()
         return (
             area.right() + 1 - size.width() - START_MARGIN,
-            area.bottom() + 1 - size.height(),
+            area.bottom() + 1 - size.height() - BOTTOM_PAD * self._scale,
         )
 
     def _save_position(self) -> None:
-        self._state.set("pet_pos", [round(self.brain.home_x), self._home_y])
+        self._state.set("pet_pos", [round(v) for v in self.brain.home])
 
     def _show_windows(self) -> None:
         self._place_pet()

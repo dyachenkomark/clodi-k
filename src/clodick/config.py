@@ -26,8 +26,10 @@ reminders = ["10:00", "15:00", "20:00"]
 [desktop]
 # Размер пикселя персонажа на экране: 3 — мелко, 4 — обычно, 6 — крупно.
 scale = 3
-# Отпускать персонажа гулять вдоль края экрана.
+# Отпускать персонажа гулять. Экран для него — пол: гуляет во все стороны.
 walks = true
+# Как далеко от своего места он уходит, в пикселях. 5000 — по всему экрану.
+roam = 500
 # Оформление: classic, claude, claude_orange, claude_night.
 theme = "claude"
 # Персонаж. Свои персонажи кладите в папку characters рядом с этим файлом.
@@ -57,6 +59,7 @@ class ConfigError(ValueError):
 class DesktopConfig:
     scale: int = 3
     walks: bool = True
+    roam: int = 500
     theme: str = DEFAULT_THEME
     character: str = DEFAULT_CHARACTER
 
@@ -124,13 +127,16 @@ def _parse_desktop(raw: dict) -> DesktopConfig:
     walks = raw.get("walks", True)
     if not isinstance(walks, bool):
         raise ConfigError("desktop.walks должен быть true или false")
+    roam = raw.get("roam", 500)
+    if not isinstance(roam, int) or roam < 0:
+        raise ConfigError("desktop.roam должен быть целым числом пикселей, 0 или больше")
     theme = raw.get("theme", DEFAULT_THEME)
     if theme not in THEMES:
         raise ConfigError(f"desktop.theme: неизвестная тема {theme!r}. Есть: {', '.join(THEMES)}")
     character = raw.get("character", DEFAULT_CHARACTER)
     if not isinstance(character, str) or not character:
         raise ConfigError("desktop.character должен быть названием папки персонажа")
-    return DesktopConfig(scale=scale, walks=walks, theme=theme, character=character)
+    return DesktopConfig(scale=scale, walks=walks, roam=roam, theme=theme, character=character)
 
 
 def _validate_hhmm(value: object) -> None:

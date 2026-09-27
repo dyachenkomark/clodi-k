@@ -43,6 +43,7 @@ class SpriteBook:
         self._house_palette = house_palette
         self._physical = max(1, round(scale * device_pixel_ratio))
         self._cache: dict[tuple, QPixmap] = {}
+        self._feet: dict[tuple, tuple[int, int] | None] = {}
         self._sheets: dict[str, QImage] = {}
 
     @property
@@ -60,6 +61,25 @@ class SpriteBook:
                 image = image.transformed(QTransform().scale(-1, 1))
             self._cache[key] = self._scaled(image)
         return self._cache[key]
+
+    def feet(self, mode: str, index: int, facing: int = 1) -> tuple[int, int] | None:
+        """Где у кадра лапы: левый край и ширина непрозрачных пикселей в трёх нижних строках.
+
+        По ним рисуется тень на «полу». None — кадр внизу пустой.
+        """
+        key = ("feet", mode, index, facing)
+        if key not in self._feet:
+            image = self._frame_image(mode, index)
+            if facing < 0:
+                image = image.transformed(QTransform().scale(-1, 1))
+            columns = [
+                x
+                for x in range(image.width())
+                for y in range(max(0, image.height() - 3), image.height())
+                if image.pixelColor(x, y).alpha() > 0
+            ]
+            self._feet[key] = (min(columns), max(columns) - min(columns) + 1) if columns else None
+        return self._feet[key]
 
     def house(self) -> QPixmap:
         key = ("house",)

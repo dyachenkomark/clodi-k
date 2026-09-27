@@ -55,6 +55,11 @@ PIXEL_FONT = {
     "%": ("101", "001", "010", "100", "101"),
 }
 
+# Запас окна персонажа в пикселях арта: сверху — под прыжок, снизу — под тень.
+TOP_PAD = 4
+BOTTOM_PAD = 2
+SHADOW_COLOR = QColor(0, 0, 0, 60)
+
 # Сердечко над головой, когда персонажа гладят курсором.
 HEART = (".X.X.", "XXXXX", ".XXX.", "..X..")
 HEART_COLOR = "#e0525f"
@@ -68,7 +73,9 @@ class PetWindow(QWidget):
     """Прозрачное окно персонажа поверх всех окон.
 
     Клик — сигнал clicked, перетаскивание двигает окно и шлёт drag_moved.
+    Экран для персонажа — пол: под лапами лежит тень, в прыжке он отрывается от неё.
     Поверх кадра рисует надпись на пузе и сердечко.
+    Кадр сдвинут вниз на sprite_offset: над ним запас под прыжок.
     """
 
     clicked = Signal()
@@ -85,16 +92,32 @@ class PetWindow(QWidget):
         self._belly_text: str | None = None
         self._belly_rect = QRect()
         self._belly_color = QColor("#26262e")
+        self._feet: tuple[int, int] | None = None
+        self._lift = 0
         self.heart_visible = False
         self._heart_timer = QTimer(self, singleShot=True, timeout=self._hide_heart)
         self._press: QPoint | None = None
         self._grab_offset = QPoint()
         self._dragging = False
 
-    def set_pixmap(self, pixmap: QPixmap) -> None:
+    @property
+    def sprite_offset(self) -> int:
+        """На сколько логических пикселей кадр ниже верхнего края окна."""
+        return TOP_PAD * self._scale
+
+    def set_pixmap(self, pixmap: QPixmap, feet: tuple[int, int] | None = None) -> None:
+        """Кадр и лапы для тени: левый край и ширина в пикселях арта."""
         self._pixmap = pixmap
-        self.setFixedSize(pixmap.deviceIndependentSize().toSize())
+        self._feet = feet
+        size = pixmap.deviceIndependentSize().toSize()
+        self.setFixedSize(size.width(), size.height() + (TOP_PAD + BOTTOM_PAD) * self._scale)
         self.update()
+
+    def set_lift(self, lift: int) -> None:
+        """Высота прыжка в пикселях арта. Тень остаётся на полу."""
+        if lift != self._lift:
+            self._lift = lift
+            self.update()
 
     @property
     def pressed(self) -> bool:
@@ -126,13 +149,36 @@ class PetWindow(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        if self._pixmap is not None:
-            painter.drawPixmap(0, 0, self._pixmap)
+        if self._pixmap is None:
+            return
+        self._paint_shadow(painter)
+        top = self.sprite_offset - self._lift * self._scale
+        painter.drawPixmap(0, top, self._pixmap)
+        painter.translate(0, top)
         if self._belly_text:
             self._paint_belly(painter)
         if self.heart_visible:
             left = self.width() - len(HEART[0]) * self._scale
             self._paint_pixels(painter, HEART, left, 0, self._scale, QColor(HEART_COLOR))
+
+    def _paint_shadow(self, painter: QPainter) -> None:
+        """Пиксельный овал под лапами. Чем выше прыжок, тем он меньше."""
+        if self._feet is None:
+            return
+        s = self._scale
+        left, width = self._feet
+        width = max(2, width + 2 - self._lift)
+        center = left + (self._feet[1]) / 2
+        ground = self.sprite_offset + self._pixmap.deviceIndependentSize().height()
+        rows = 4
+        for row in range(rows):
+            dy = (row + 0.5 - rows / 2) / (rows / 2)
+            half = round(width / 2 * (1 - dy * dy) ** 0.5)
+            if half <= 0:
+                continue
+            x = round(center - half) * s
+            y = int(ground + (row - rows / 2) * s)
+            painter.fillRect(x, y, 2 * half * s, s, SHADOW_COLOR)
 
     def _paint_belly(self, painter: QPainter) -> None:
         text, rect = self._belly_text, self._belly_rect

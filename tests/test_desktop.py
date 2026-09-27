@@ -121,7 +121,7 @@ def test_hide_and_show(make_desktop):
 
 def test_dragged_raccoon_stays_and_is_remembered(make_desktop):
     first, _, _ = make_desktop()
-    first.brain._walk_to(first.brain.x - 200)
+    first.brain._walk_to(first.brain.x - 200, first.brain.y)
     first.brain._outside = True
     first.pet.move(100, 200)
     first.pet.drag_moved.emit()
@@ -132,7 +132,7 @@ def test_dragged_raccoon_stays_and_is_remembered(make_desktop):
 
     second, _, _ = make_desktop()
     assert (second.pet.x(), second.pet.y()) == (100, 200)
-    assert second.brain.home_x == 100
+    assert second.brain.home == (100, 200 + second.pet.sprite_offset)
 
 
 def test_raccoon_moves_to_where_old_house_stood(make_desktop):
@@ -140,13 +140,14 @@ def test_raccoon_moves_to_where_old_house_stood(make_desktop):
     first._state.set("house_pos", [100, 200])
     second, _, _ = make_desktop()
     scale = second._scale
-    assert second.pet.x() == 100 + 36 * scale
-    assert second.pet.y() + second.pet.height() == 200 + 30 * scale
+    sprite = second._sprite_pos()
+    assert sprite.x() == 100 + 36 * scale
+    assert sprite.y() + second.character.height * scale == 200 + 30 * scale
 
 
 def test_walking_moves_window(make_desktop):
     desktop, _, _ = make_desktop()
-    desktop.brain._walk_to(desktop.brain.x - 200)
+    desktop.brain._walk_to(desktop.brain.x - 200, desktop.brain.y - 100)
     desktop.brain._outside = True
     start = desktop.pet.x()
     for _ in range(10):
@@ -276,7 +277,7 @@ def playful_desktop(qapp, config, repo):
 def test_ram_is_written_on_belly(playful_desktop):
     desktop, _ = playful_desktop
     assert desktop.pet.belly_text == "42%"
-    desktop.brain._walk_to(desktop.brain.x - 100)
+    desktop.brain._walk_to(desktop.brain.x - 100, desktop.brain.y)
     desktop._apply_frame(restart=True)
     assert desktop.pet.belly_text is None
     desktop.brain._sit()
@@ -317,12 +318,14 @@ def test_playful_off_stops_watching(playful_desktop):
 def test_checking_a_task_makes_raccoon_hop(playful_desktop):
     desktop, _ = playful_desktop
     home_y = desktop.pet.y()
+    assert desktop.pet._lift == 0
     desktop.open_checklist()
     desktop.checklist.boxes["sport"].setChecked(True)
-    assert desktop.pet.y() < home_y
+    assert desktop.pet._lift > 0
+    assert desktop.pet.y() == home_y  # окно на месте, отрывается только кадр от тени
     for _ in range(10):
         desktop._hop_step()
-    assert desktop.pet.y() == home_y
+    assert desktop.pet._lift == 0
 
 
 def test_raccoon_has_extra_poses(playful_desktop):
@@ -361,4 +364,27 @@ def test_dodge_catches_cursor_that_jumps_over_raccoon_between_polls(playful_desk
     cursor.pos = QPoint(rect.right() + 150, y)
     desktop._watch_cursor(now=10.1)
     assert desktop.brain.mode is Mode.WALK
-    assert desktop.brain.facing == 1
+    assert desktop.brain.facing == "right"
+
+
+@pytest.mark.parametrize(
+    ("dx", "dy", "animation"),
+    [(0, 200, ("walk_down", 1)), (0, -200, ("walk_up", 1)), (-200, 0, ("walk", -1))],
+)
+def test_walk_animation_follows_direction(playful_desktop, dx, dy, animation):
+    desktop, _ = playful_desktop
+    desktop.brain._walk_to(desktop.brain.x + dx, desktop.brain.y + dy)
+    desktop._after_brain_change()
+    assert desktop._shown_anim == animation
+
+
+def test_raccoon_has_shadow_under_feet(playful_desktop):
+    desktop, _ = playful_desktop
+    feet = desktop.pet._feet
+    assert feet is not None
+    left, width = feet
+    assert left >= 0 and left + width <= desktop.character.width
+    image = desktop.pet.grab().toImage()
+    ground = desktop.pet.sprite_offset + desktop.character.height * desktop._scale
+    center_x = (left + width // 2) * desktop._scale
+    assert image.pixelColor(center_x, ground + 1).alpha() > 0

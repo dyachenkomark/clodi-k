@@ -1,8 +1,11 @@
+import math
 import random
 
 import pytest
 
-from clodick.desktop.brain import SIT_AT_HOME, Bounds, Brain, Mode
+from clodick.desktop.brain import DOWN, LEFT, RIGHT, SIT_AT_HOME, UP, Area, Brain, Mode
+
+AREA = Area(0, 0, 1000, 800)
 
 
 class ScriptedRng(random.Random):
@@ -19,8 +22,8 @@ class ScriptedRng(random.Random):
         return a + (b - a) * super().random()
 
 
-def make_brain(rolls=(), walks=True, home=500.0):
-    return Brain(home, Bounds(0, 1000), speed=40.0, walks=walks, rng=ScriptedRng(rolls))
+def make_brain(rolls=(), walks=True, home=(500.0, 400.0), roam=300.0, area=AREA):
+    return Brain(home, area, speed=40.0, walks=walks, roam=roam, rng=ScriptedRng(rolls))
 
 
 def run(brain, seconds, step=0.1):
@@ -44,31 +47,59 @@ def test_starts_sitting_at_home():
     brain = make_brain()
     assert brain.mode is Mode.SIT
     assert brain.at_home
-    assert brain.x == 500
+    assert (brain.x, brain.y) == (500, 400)
 
 
-def test_walk_out_and_come_back():
+def test_walk_out_within_roam_and_come_back():
     brain = make_brain(rolls=[0.1])
     run_until(brain, walking, SIT_AT_HOME[1] + 1)
     assert not brain.at_home
-    target_side = brain.facing
+    target = brain._target
+    assert math.dist(target, (500, 400)) <= 300 + 1e-6
 
     run(brain, 60)
     assert brain.at_home
-    assert brain.x == 500
+    assert (brain.x, brain.y) == (500, 400)
     assert brain.mode in (Mode.SIT, Mode.SLEEP)
-    assert brain.facing == -target_side
+    assert brain.facing == DOWN
+
+
+def test_walks_in_both_axes():
+    ys = set()
+    for seed in range(20):
+        brain = Brain((500.0, 400.0), AREA, speed=40.0, roam=300.0, rng=random.Random(seed))
+        for _ in range(3000):
+            brain.tick(0.1)
+            ys.add(round(brain.y))
+    assert len(ys) > 50
+
+
+@pytest.mark.parametrize(
+    ("target", "facing"),
+    [((600, 400), RIGHT), ((400, 400), LEFT), ((500, 200), UP), ((510, 600), DOWN)],
+)
+def test_facing_follows_main_direction(target, facing):
+    brain = make_brain()
+    brain._walk_to(*target)
+    assert brain.facing == facing
+
+
+def test_side_remembers_last_horizontal_direction():
+    brain = make_brain()
+    brain._walk_to(400, 400)
+    brain._walk_to(400 - 1, 100)
+    assert brain.facing == UP
+    assert brain.side == -1
 
 
 def test_no_walks_when_disabled():
     brain = make_brain(rolls=[0.1] * 10, walks=False)
     run(brain, 600, step=1.0)
     assert brain.at_home
-    assert brain.x == 500
 
 
 def test_falls_asleep_and_wakes():
-    brain = make_brain(rolls=[0.4])
+    brain = make_brain(rolls=[0.5])
     run_until(brain, lambda b: b.mode is Mode.SLEEP, SIT_AT_HOME[1] + 1)
     brain.wake()
     assert brain.mode is Mode.SIT
@@ -79,27 +110,19 @@ def test_wave_then_returns_home():
     run_until(brain, walking, SIT_AT_HOME[1] + 1)
     run(brain, 1)
     brain.wave(2)
-    x = brain.x
+    pos = (brain.x, brain.y)
     run(brain, 1)
     assert brain.mode is Mode.WAVE
-    assert brain.x == x
+    assert (brain.x, brain.y) == pos
     run(brain, 60)
     assert brain.at_home
 
 
-def test_house_moved_while_home_moves_raccoon():
-    brain = make_brain()
-    brain.set_home(200, Bounds(0, 1000))
-    assert brain.x == 200
-
-
-def test_house_moved_while_walking_turns_back():
-    brain = make_brain(rolls=[0.1])
-    run_until(brain, walking, SIT_AT_HOME[1] + 1)
-    brain.set_home(900, Bounds(0, 1000))
-    run(brain, 60)
-    assert brain.at_home
-    assert brain.x == 900
+def test_smaller_area_pulls_home_inside():
+    brain = make_brain(home=(900.0, 700.0))
+    brain.set_area(Area(0, 0, 500, 500))
+    assert brain.home == (500, 500)
+    assert (brain.x, brain.y) == (500, 500)
 
 
 def test_disabling_walks_sends_raccoon_home():
@@ -110,16 +133,17 @@ def test_disabling_walks_sends_raccoon_home():
     assert brain.at_home
 
 
-@pytest.mark.parametrize("home", [0.0, 1000.0])
-def test_walk_stays_in_bounds(home):
-    brain = Brain(home, Bounds(0, 1000), speed=40.0, rng=random.Random(7))
+@pytest.mark.parametrize("home", [(0.0, 0.0), (1000.0, 800.0)])
+def test_walk_stays_in_area(home):
+    brain = Brain(home, AREA, speed=40.0, roam=2000.0, rng=random.Random(7))
     for _ in range(20000):
         brain.tick(0.1)
         assert 0 <= brain.x <= 1000
+        assert 0 <= brain.y <= 800
 
 
 def test_no_room_to_walk():
-    brain = Brain(10, Bounds(0, 50), speed=40.0, rng=ScriptedRng([0.1] * 10))
+    brain = make_brain(rolls=[0.1] * 10, roam=50.0)
     run(brain, 600, step=1.0)
     assert brain.at_home
 
@@ -127,33 +151,34 @@ def test_no_room_to_walk():
 def test_place_makes_new_home_and_stops_walk():
     brain = make_brain()
     brain._outside = True
-    brain._walk_to(100.0)
-    brain.place(300.0)
-    assert brain.x == brain.home_x == 300.0
+    brain._walk_to(100.0, 100.0)
+    brain.place(300.0, 200.0)
+    assert (brain.x, brain.y) == brain.home == (300.0, 200.0)
     assert brain.at_home
     assert brain.mode is Mode.SIT
     run(brain, 1)
-    assert brain.x == 300.0
+    assert (brain.x, brain.y) == (300.0, 200.0)
 
 
 def test_dodge_runs_fast_then_goes_home():
     brain = make_brain()
-    brain.dodge(600.0)
+    assert brain.dodge(600.0, 400.0)
     assert brain.mode is Mode.WALK
     brain.tick(0.5)
     assert brain.x > 500 + 40 * 0.5 * 2  # быстрее обычного шага
     run(brain, 1)
-    assert brain.x == 600.0
+    assert (brain.x, brain.y) == (600.0, 400.0)
     assert not brain.at_home
     run(brain, 30)
     assert brain.at_home
 
 
 def test_dodge_is_clamped_to_screen():
-    brain = make_brain(home=990.0)
-    brain.dodge(2000.0)
+    brain = make_brain(home=(990.0, 400.0))
+    brain.dodge(2000.0, 400.0)
     run(brain, 5)
     assert brain.x == 1000.0
+    assert not make_brain(home=(1000.0, 400.0)).dodge(2000.0, 400.0)
 
 
 def test_sleepy_brain_sleeps_more():
@@ -182,6 +207,6 @@ def test_fidgets_only_when_available():
 
 def test_act_does_not_interrupt_walk():
     brain = make_brain()
-    brain._walk_to(100.0)
+    brain._walk_to(100.0, 100.0)
     brain.act(Mode.EAT, 3.0)
     assert brain.mode is Mode.WALK
