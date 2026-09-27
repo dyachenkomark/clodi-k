@@ -346,6 +346,16 @@ QToolButton#remove {{
     font-family: {t.body_font}; min-width: 18px; padding: 0;
 }}
 QToolButton#remove:hover {{ color: {t.text}; }}
+QToolButton#focus {{
+    color: {t.muted}; background: transparent; border: none; font-size: 12px; padding: 0 2px;
+}}
+QToolButton#focus:hover {{ color: {t.accent}; }}
+QLabel#focusline {{ color: {t.accent}; font-weight: 600; font-size: 13px; }}
+QToolButton#stop {{
+    color: {t.muted}; background: transparent; border: 1px solid {t.muted};
+    border-radius: 5px; font-size: 11px; padding: 1px 6px;
+}}
+QToolButton#stop:hover {{ color: {t.text}; border-color: {t.text}; }}
 """
 
 
@@ -362,6 +372,9 @@ class ChecklistPopup(QWidget):
     toggled = Signal(str, bool)
     task_added = Signal(str, bool)
     task_removed = Signal(str)
+    # Pomodoro: запустить фокус на пункте и остановить текущий.
+    focus_requested = Signal(str)
+    focus_stopped = Signal()
 
     def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -392,25 +405,44 @@ class ChecklistPopup(QWidget):
         adder.addWidget(self.new_task, 1)
         adder.addWidget(self.new_task_daily)
 
+        self.focus_line = QLabel(objectName="focusline")
+        self.stop_button = QToolButton(objectName="stop", text="Stop")
+        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_button.clicked.connect(self.focus_stopped)
+        self._focus_row = QWidget()
+        focus_layout = QHBoxLayout(self._focus_row)
+        focus_layout.setContentsMargins(0, 0, 0, 0)
+        focus_layout.addWidget(self.focus_line, 1)
+        focus_layout.addWidget(self.stop_button)
+        self._focus_row.hide()
+
         self._footer = QLabel(objectName="footer")
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 12, 14, 10)
         layout.setSpacing(8)
         layout.addLayout(header)
+        layout.addWidget(self._focus_row)
         layout.addLayout(self._items)
         layout.addLayout(adder)
         layout.addWidget(self._footer)
         self._boxes: dict[str, QCheckBox] = {}
         self._rows: list[QWidget] = []
         self.remove_buttons: dict[str, QToolButton] = {}
+        self.focus_buttons: dict[str, QToolButton] = {}
         self.setMinimumWidth(240)
 
     @property
     def boxes(self) -> dict[str, QCheckBox]:
         return self._boxes
 
-    def set_status(self, status: DayStatus, ram: int | None) -> None:
+    def set_focus(self, text: str | None) -> None:
+        """Строка текущего фокуса или перерыва под заголовком. None — спрятать."""
+        self.focus_line.setText(text or "")
+        self._focus_row.setVisible(bool(text))
+        self.adjustSize()
+
+    def set_status(self, status: DayStatus, ram: int | None, focus_today: int = 0) -> None:
         self._title.setText(f"Today, {MONTHS[status.day.month - 1]} {status.day.day}")
         self._progress.setText(f"{status.done_count}/{status.total}")
         keys = [item.category.key for item in status.items]
@@ -421,7 +453,10 @@ class ChecklistPopup(QWidget):
             box.blockSignals(True)
             box.setChecked(item.done)
             box.blockSignals(False)
-        self._footer.setText("" if ram is None else f"RAM: {ram}%")
+        parts = [] if ram is None else [f"RAM: {ram}%"]
+        if focus_today:
+            parts.append(f"Focus today: {focus_today}")
+        self._footer.setText(" · ".join(parts))
         self.adjustSize()
 
     def open_near(self, anchor: QRect, screen_rect: QRect) -> None:
@@ -450,6 +485,7 @@ class ChecklistPopup(QWidget):
         self._rows = []
         self._boxes = {}
         self.remove_buttons = {}
+        self.focus_buttons = {}
         for item in status.items:
             key = item.category.key
             row = QWidget()
@@ -459,6 +495,12 @@ class ChecklistPopup(QWidget):
             box.setCursor(Qt.CursorShape.PointingHandCursor)
             box.toggled.connect(lambda checked, key=key: self.toggled.emit(key, checked))
             line.addWidget(box, 1)
+            focus = QToolButton(objectName="focus", text="▶")
+            focus.setToolTip("Start a focus session on this")
+            focus.setCursor(Qt.CursorShape.PointingHandCursor)
+            focus.clicked.connect(lambda _=False, key=key: self.focus_requested.emit(key))
+            line.addWidget(focus)
+            self.focus_buttons[key] = focus
             if item.category.custom:
                 remove = QToolButton(objectName="remove", text="×")
                 remove.setToolTip("Delete task")

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from clodick import paths
 from clodick.characters import DEFAULT_CHARACTER, Character, builtin_dir, discover
 from clodick.config import Config
+from clodick.core.pomodoro import Event, Phase, Pomodoro
 from clodick.core.reminders import (
     DONE_TEXT,
     ReminderClock,
@@ -130,6 +131,10 @@ class DesktopApp(QObject):
             fidgets=self._fidgets(),
         )
         self._reminders_on = bool(state.get("reminders_on", True))
+        self.pomodoro = Pomodoro.from_dict(config.pomodoro, state.get("pomodoro"))
+        self._shown_minutes: int | None = None
+        if self.pomodoro.phase is Phase.FOCUS:
+            self.brain.set_walks(False)
         self._playful = bool(state.get("playful", True))
         self._belly_ram = bool(state.get("belly_ram", True))
         self._last_cursor: QPoint | None = None
@@ -164,6 +169,8 @@ class DesktopApp(QObject):
         self.checklist.toggled.connect(self._toggle)
         self.checklist.task_added.connect(self._add_task)
         self.checklist.task_removed.connect(self._remove_task)
+        self.checklist.focus_requested.connect(self.start_focus)
+        self.checklist.focus_stopped.connect(self.stop_focus)
 
         self.menu = self._build_menu()
         self.tray = self._build_tray()
@@ -183,6 +190,7 @@ class DesktopApp(QObject):
         self._reminder_timer.start()
         if self._playful:
             self._cursor_timer.start()
+        self._pomodoro_changed(save=False)
         QTimer.singleShot(GREETING_DELAY_MS, self._greet)
 
     def quit(self) -> None:
@@ -225,6 +233,78 @@ class DesktopApp(QObject):
         self._belly_ram = on
         self._update_belly()
         self._belly_action.setChecked(on)
+
+    # --- Pomodoro ---
+
+    def start_focus(self, key: str | None = None) -> None:
+        """Фокус на пункте чек-листа или просто фокус. Енот сидит тихо и не гуляет."""
+        self.pomodoro.start_focus(self._clock(), key)
+        self.brain.set_walks(False)
+        title = self._tracker.title_of(key) if key else None
+        minutes = self.pomodoro.config.focus
+        log.info("фокус %s мин: %s", minutes, key or "-")
+        self._pomodoro_changed()
+        self.say(f"Focus{f' on {title}' if title else ''}: {minutes} min. I'll keep quiet.", 5)
+
+    def stop_focus(self) -> None:
+        self.pomodoro.stop()
+        self.brain.set_walks(self._walks_wanted())
+        log.info("фокус остановлен")
+        self._pomodoro_changed()
+
+    def _walks_wanted(self) -> bool:
+        return bool(self._state.get("walks", self._config.desktop.walks))
+
+    def _check_pomodoro(self) -> None:
+        key, started = self.pomodoro.key, self.pomodoro.started
+        event = self.pomodoro.check(self._clock())
+        if event is Event.FOCUS_DONE:
+            minutes = self.pomodoro.config.focus
+            self._tracker.add_focus(key, started, minutes)
+            if key and self._tracker.title_of(key) is not None:
+                self._tracker.mark_done(key, source="focus")
+            self.brain.set_walks(self._walks_wanted())
+            log.info("фокус закончен: %s", key or "-")
+            self._pomodoro_changed()
+            self.hop()
+            self.say(f"Focus done! Take a {self.pomodoro.break_minutes} min break.", 10)
+        elif event is Event.BREAK_DONE:
+            self._pomodoro_changed()
+            self.say("Break's over. Another round?", 10)
+        elif self.pomodoro.minutes_left(self._clock()) != self._shown_minutes:
+            self._pomodoro_changed(save=False)
+
+    def _pomodoro_changed(self, *, save: bool = True) -> None:
+        """Обновить всё, где видно Pomodoro: пузо, чек-лист, подсказку трея, меню."""
+        if save:
+            self._state.set("pomodoro", self.pomodoro.to_dict())
+        self._shown_minutes = self.pomodoro.minutes_left(self._clock())
+        self._update_belly()
+        self._update_tooltip()
+        self.checklist.set_focus(self._focus_text())
+        if self.checklist.isVisible():
+            self._refresh_checklist()
+        self._stop_focus_action.setEnabled(self.pomodoro.active)
+
+    def _focus_text(self) -> str | None:
+        p = self.pomodoro
+        if p.phase is Phase.FOCUS:
+            title = self._tracker.title_of(p.key) if p.key else None
+            return f"Focus{f': {title}' if title else ''} · {self._shown_minutes} min left"
+        if p.phase is Phase.BREAK:
+            return f"Break · {self._shown_minutes} min left"
+        return None
+
+    def _update_tooltip(self) -> None:
+        if self.tray is None:
+            return
+        parts = ["cloDICK"]
+        focus = self._focus_text()
+        if focus:
+            parts.append(focus)
+        if self._ram is not None:
+            parts.append(f"RAM {self._ram}%")
+        self.tray.setToolTip(" · ".join(parts))
 
     def set_reminders(self, on: bool) -> None:
         self._state.set("reminders_on", on)
@@ -278,7 +358,7 @@ class DesktopApp(QObject):
 
     def open_checklist(self) -> None:
         self.bubble.hide()
-        self.checklist.set_status(self._tracker.status(), self._ram)
+        self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
         self.checklist.open_near(self.pet.geometry(), self._screen_rect())
 
     def check_reminders_now(self) -> None:
@@ -295,7 +375,7 @@ class DesktopApp(QObject):
         else:
             self._tracker.unmark(key)
         status = self._tracker.status()
-        self.checklist.set_status(status, self._ram)
+        self.checklist.set_status(status, self._ram, self._tracker.focus_count())
         log.info("%s %s через окно", "done" if checked else "undo", key)
         if checked and status.all_done:
             self.say(DONE_TEXT, seconds=6)
@@ -312,11 +392,11 @@ class DesktopApp(QObject):
 
     def _refresh_checklist(self) -> None:
         """Список изменился: перерисовать и заново прижать к еноту, размер мог поменяться."""
-        self.checklist.set_status(self._tracker.status(), self._ram)
+        self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
         self.checklist.open_near(self.pet.geometry(), self._screen_rect())
 
     def _greet(self) -> None:
-        if not self._reminders_on:
+        if not self._reminders_on or self.pomodoro.phase is Phase.FOCUS:
             return
         text = greeting_text(self._tracker.status())
         if text:
@@ -324,6 +404,8 @@ class DesktopApp(QObject):
 
     def _check_reminders(self) -> None:
         due = self._reminder_clock.check(self._clock())
+        if self.pomodoro.phase is Phase.FOCUS:
+            return  # во время фокуса енот молчит
         if not (due and self._reminders_on):
             return
         text = reminder_text(self._tracker.status())
@@ -343,6 +425,8 @@ class DesktopApp(QObject):
         dt, self._last_tick = now - self._last_tick, now
         hour = self._clock().hour
         self.brain.sleepy = hour >= NIGHT_FROM or hour < NIGHT_TO
+        if self.pomodoro.active:
+            self._check_pomodoro()
         self.brain.tick(min(dt, 2.0))
         self._after_brain_change()
 
@@ -493,14 +577,21 @@ class DesktopApp(QObject):
     def _update_belly(self) -> None:
         """Загрузка RAM на пузе. Когда пузо сбоку или закрыто лапами, надписи нет."""
         belly = self.character.belly
-        hidden = self.brain.mode not in BELLY_MODES
-        if hidden or not (self._belly_ram and belly and self._ram is not None):
+        if belly is None or self.brain.mode not in BELLY_MODES:
             self.pet.set_belly(None)
             return
         palette = self.character.palette_for(self.theme.key)
         color = palette.get("g") or palette.get("K") or "#26262e"
-        x, y, w, h = (v * self._scale for v in belly)
-        self.pet.set_belly(f"{self._ram}%", QRect(x, y, w, h), color)
+        rect = QRect(*(v * self._scale for v in belly))
+        # Во время Pomodoro на пузе минуты: фокус цветом акцента, перерыв обычным.
+        if self.pomodoro.active:
+            focus = self.pomodoro.phase is Phase.FOCUS
+            minutes = self.pomodoro.minutes_left(self._clock())
+            self.pet.set_belly(str(minutes), rect, self.theme.accent if focus else color)
+        elif self._belly_ram and self._ram is not None:
+            self.pet.set_belly(f"{self._ram}%", rect, color)
+        else:
+            self.pet.set_belly(None)
 
     # --- место персонажа ---
 
@@ -567,8 +658,7 @@ class DesktopApp(QObject):
         except Exception:  # мониторинг не должен ронять приложение
             log.exception("не удалось прочитать RAM")
             return
-        if self.tray is not None:
-            self.tray.setToolTip(f"cloDICK · RAM {self._ram}%")
+        self._update_tooltip()
         self._update_belly()
 
     # --- меню и трей ---
@@ -576,6 +666,9 @@ class DesktopApp(QObject):
     def _build_menu(self) -> QMenu:
         menu = QMenu()
         menu.addAction("Today's checklist", self.open_checklist)
+        menu.addAction("Start focus", lambda: self.start_focus())
+        self._stop_focus_action = menu.addAction("Stop focus", self.stop_focus)
+        self._stop_focus_action.setEnabled(self.pomodoro.active)
         menu.addSeparator()
         self._character_actions = QActionGroup(menu)
         characters_menu = menu.addMenu("Character")

@@ -33,6 +33,17 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL      -- ISO 8601
     );
     """,
+    # 4: законченные фокусы Pomodoro.
+    """
+    CREATE TABLE focus_sessions (
+        id         INTEGER PRIMARY KEY,
+        day        TEXT NOT NULL,  -- логический день, ГГГГ-ММ-ДД
+        task_key   TEXT,           -- на какой пункт чек-листа был фокус, может не быть
+        started_at TEXT NOT NULL,  -- ISO 8601
+        minutes    INTEGER NOT NULL
+    );
+    CREATE INDEX focus_sessions_day ON focus_sessions (day);
+    """,
 ]
 
 

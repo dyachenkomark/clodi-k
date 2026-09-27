@@ -388,3 +388,46 @@ def test_raccoon_has_shadow_under_feet(playful_desktop):
     ground = desktop.pet.sprite_offset + desktop.character.height * desktop._scale
     center_x = (left + width // 2) * desktop._scale
     assert image.pixelColor(center_x, ground + 1).alpha() > 0
+
+
+def test_pomodoro_focus_marks_task_and_starts_break(make_desktop):
+    desktop, tracker, clock = make_desktop()
+    desktop.open_checklist()
+    desktop.checklist.focus_buttons["sport"].click()
+    assert desktop.pomodoro.phase.value == "focus"
+    assert not desktop.brain.walks
+    assert desktop.pet.belly_text == "25"
+    assert desktop.checklist.focus_line.text() == "Focus: Sport · 25 min left"
+
+    clock.now = datetime(2026, 9, 26, 9, 10, 30)
+    desktop._check_pomodoro()
+    assert desktop.pet.belly_text == "15"
+
+    clock.now = datetime(2026, 9, 26, 10, 0, 30)
+    desktop.check_reminders_now()
+    assert desktop.bubble.text != "Hey! Still to do: Sport, Study, Language."
+
+    clock.now = datetime(2026, 9, 26, 9, 25)
+    desktop._check_pomodoro()
+    assert desktop.pomodoro.phase.value == "break"
+    assert tracker.status().items[0].done
+    assert tracker.focus_count() == 1
+    assert desktop.brain.walks
+    assert desktop.bubble.text == "Focus done! Take a 5 min break."
+
+    clock.now = datetime(2026, 9, 26, 9, 30)
+    desktop._check_pomodoro()
+    assert not desktop.pomodoro.active
+    assert desktop.bubble.text == "Break's over. Another round?"
+    assert desktop.pet.belly_text == "42%"
+
+
+def test_pomodoro_survives_restart_and_can_be_stopped(make_desktop):
+    first, _, _ = make_desktop()
+    first.start_focus()
+    second, _, _ = make_desktop()
+    assert second.pomodoro.phase.value == "focus"
+    assert not second.brain.walks
+    second.checklist.stop_button.click()
+    assert not second.pomodoro.active
+    assert second.brain.walks

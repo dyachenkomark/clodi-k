@@ -70,3 +70,18 @@ class CompletionRepository:
                 (day.isoformat(), f"{TASK_PREFIX}%"),
             ).fetchall()
         return {key for (key,) in rows}
+
+    def add_focus(self, day: date, key: str | None, started_at: datetime, minutes: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO focus_sessions (day, task_key, started_at, minutes) "
+                "VALUES (?, ?, ?, ?)",
+                (day.isoformat(), key, started_at.isoformat(timespec="seconds"), minutes),
+            )
+
+    def focus_count(self, day: date) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM focus_sessions WHERE day = ?", (day.isoformat(),)
+            ).fetchone()
+        return row[0]

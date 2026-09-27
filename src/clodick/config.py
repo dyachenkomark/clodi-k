@@ -8,6 +8,7 @@ from pathlib import Path
 
 from clodick.characters import DEFAULT_CHARACTER
 from clodick.core.models import Category
+from clodick.core.pomodoro import PomodoroConfig
 from clodick.desktop.themes import DEFAULT_THEME, THEMES
 
 DEFAULT_CONFIG = """\
@@ -34,6 +35,14 @@ roam = 500
 theme = "claude"
 # Персонаж. Свои персонажи кладите в папку characters рядом с этим файлом.
 character = "raccoon"
+
+[pomodoro]
+# Pomodoro: минуты фокуса, короткого и длинного перерыва.
+focus = 25
+short_break = 5
+long_break = 15
+# После скольких фокусов длинный перерыв.
+rounds = 4
 
 [[categories]]
 key = "sport"
@@ -71,6 +80,7 @@ class Config:
     daily_goal_minutes: int = 15
     reminders: tuple[str, ...] = field(default_factory=tuple)
     desktop: DesktopConfig = field(default_factory=DesktopConfig)
+    pomodoro: PomodoroConfig = field(default_factory=PomodoroConfig)
 
 
 def load_config(path: Path) -> Config:
@@ -117,7 +127,19 @@ def parse_config(raw: dict) -> Config:
         daily_goal_minutes=goal,
         reminders=reminders,
         desktop=_parse_desktop(raw.get("desktop", {})),
+        pomodoro=_parse_pomodoro(raw.get("pomodoro", {})),
     )
+
+
+def _parse_pomodoro(raw: dict) -> PomodoroConfig:
+    limits = {"focus": 180, "short_break": 60, "long_break": 120, "rounds": 12}
+    values = {}
+    for name, top in limits.items():
+        value = raw.get(name, getattr(PomodoroConfig, name))
+        if not isinstance(value, int) or not 1 <= value <= top:
+            raise ConfigError(f"pomodoro.{name} должен быть целым числом от 1 до {top}")
+        values[name] = value
+    return PomodoroConfig(**values)
 
 
 def _parse_desktop(raw: dict) -> DesktopConfig:

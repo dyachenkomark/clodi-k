@@ -45,3 +45,12 @@ def test_roam_is_validated():
     assert parse_config(base).desktop.roam == 500
     with pytest.raises(ConfigError, match="roam"):
         parse_config({**base, "desktop": {"roam": -1}})
+
+
+def test_pomodoro_settings():
+    base = {"categories": [{"key": "a", "title": "A"}]}
+    assert parse_config(base).pomodoro.focus == 25
+    config = parse_config({**base, "pomodoro": {"focus": 50, "rounds": 2}})
+    assert (config.pomodoro.focus, config.pomodoro.short_break, config.pomodoro.rounds) == (50, 5, 2)
+    with pytest.raises(ConfigError, match="pomodoro.focus"):
+        parse_config({**base, "pomodoro": {"focus": 0}})

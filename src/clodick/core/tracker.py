@@ -58,6 +58,20 @@ class Tracker:
         tid = task_id(key)
         return tid is not None and self._repo.remove_task(tid)
 
+    def add_focus(self, key: str | None, started_at: datetime, minutes: int) -> None:
+        """Записать законченный фокус Pomodoro. День считается по моменту начала."""
+        day = logical_day(started_at, self._config.day_start_hour)
+        self._repo.add_focus(day, key, started_at, minutes)
+
+    def focus_count(self) -> int:
+        return self._repo.focus_count(self.today())
+
+    def title_of(self, key: str) -> str | None:
+        for cat in self._items(self.today()):
+            if cat.key == key:
+                return cat.title
+        return None
+
     def _items(self, day: date) -> list[Category]:
         closed = self._repo.done_before(day)
         items = list(self._config.categories)
