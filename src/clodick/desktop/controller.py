@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QPoint, QRect, QTimer
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -25,9 +25,9 @@ from clodick.core.reminders import (
 from clodick.core.tracker import Tracker
 from clodick.desktop.art import GROUND_ROW, YARD_X
 from clodick.desktop.brain import Bounds, Brain, Mode
-from clodick.desktop.sprites import HOUSE_SIZE, SpriteBook
+from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
-from clodick.desktop.widgets import BubbleWindow, ChecklistPopup, HouseWindow, PetWindow
+from clodick.desktop.widgets import BubbleWindow, ChecklistPopup, PetWindow
 from clodick.storage.state import StateStore
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ IDLE_TICK_MS = 1000
 RAM_REFRESH_MS = 5000
 REMINDER_CHECK_MS = 30_000
 GREETING_DELAY_MS = 3000
+# Отступ енота от правого края экрана при первом запуске.
+START_MARGIN = 24
 
 
 class DesktopApp(QObject):
@@ -69,16 +71,15 @@ class DesktopApp(QObject):
         self.character = self._pick_character(state.get("character") or config.desktop.character)
         self._book = self._make_book(self.character)
 
-        self.house = HouseWindow(self._book.house(), self._scale, self.theme)
         self.pet = PetWindow()
         self.bubble = BubbleWindow(self.theme)
         self.checklist = ChecklistPopup(self.theme)
 
-        self._restore_house_position()
-        home_x, bounds = self._home_geometry()
+        home_x, self._home_y = self._restore_position()
+        self.pet.move(home_x, self._home_y)
         self.brain = Brain(
-            home_x,
-            bounds,
+            float(home_x),
+            self._bounds(),
             speed=10.0 * self._scale,
             walks=bool(state.get("walks", config.desktop.walks)),
             rng=rng,
@@ -98,12 +99,10 @@ class DesktopApp(QObject):
             self, interval=REMINDER_CHECK_MS, timeout=self._check_reminders
         )
 
-        self.house.clicked.connect(self.open_checklist)
         self.pet.clicked.connect(self._pet_clicked)
         self.bubble.clicked.connect(self.open_checklist)
-        self.house.drag_moved.connect(self._house_moved)
-        self.house.drag_finished.connect(self._save_house_position)
-        self.house.context_requested.connect(self._show_menu)
+        self.pet.drag_moved.connect(self._pet_dragged)
+        self.pet.drag_finished.connect(self._save_position)
         self.pet.context_requested.connect(self._show_menu)
         self.checklist.toggled.connect(self._toggle)
 
@@ -126,21 +125,21 @@ class DesktopApp(QObject):
         QTimer.singleShot(GREETING_DELAY_MS, self._greet)
 
     def quit(self) -> None:
-        self._save_house_position()
+        self._save_position()
         if self.tray is not None:
             self.tray.hide()
         self._app.quit()
 
     @property
     def visible(self) -> bool:
-        return self.house.isVisible()
+        return self.pet.isVisible()
 
     def set_visible(self, visible: bool) -> None:
         self._state.set("hidden", not visible)
         if visible:
             self._show_windows()
         else:
-            for window in (self.house, self.pet, self.bubble, self.checklist):
+            for window in (self.pet, self.bubble, self.checklist):
                 window.hide()
         self._visible_action.setChecked(visible)
 
@@ -157,21 +156,17 @@ class DesktopApp(QObject):
 
     # --- реплики и чек-лист ---
 
-    @property
-    def home_offset(self) -> tuple[int, int]:
-        """Где стоит персонаж относительно домика, в логических пикселях."""
-        return (
-            YARD_X * self._scale,
-            (GROUND_ROW + 1 - self.character.height) * self._scale,
-        )
-
     def set_character(self, character_id: str) -> None:
         """Сменить персонажа на лету. Выбор запоминается."""
         character = self._pick_character(character_id)
         self._state.set("character", character.id)
+        # Лапы остаются на том же уровне, даже если новый персонаж выше или ниже.
+        self._home_y += (self.character.height - character.height) * self._scale
         self.character = character
         self._book = self._make_book(character)
-        self._house_moved()
+        self.brain.set_home(self.brain.home_x, self._bounds())
+        self._after_brain_change()
+        self._save_position()
         self._apply_frame(restart=True)
         for action in self._character_actions.actions():
             action.setChecked(action.data() == character.id)
@@ -189,7 +184,6 @@ class DesktopApp(QObject):
             QGuiApplication.primaryScreen().devicePixelRatio(),
             character=character,
             theme=self.theme.key,
-            house_palette=self.theme.palette,
         )
 
     def say(self, text: str, seconds: float = 12.0) -> None:
@@ -205,8 +199,7 @@ class DesktopApp(QObject):
     def open_checklist(self) -> None:
         self.bubble.hide()
         self.checklist.set_status(self._tracker.status(), self._ram)
-        anchor = self.house.geometry().united(self.pet.geometry())
-        self.checklist.open_near(anchor, self._screen_rect())
+        self.checklist.open_near(self.pet.geometry(), self._screen_rect())
 
     def check_reminders_now(self) -> None:
         """Для тестов и отладки: проверить напоминания немедленно."""
@@ -287,8 +280,8 @@ class DesktopApp(QObject):
         self._anim_timer.start(int(seconds * 1000))
 
     def _place_pet(self) -> None:
-        y = self.house.y() + self.home_offset[1]
         x = round(self.brain.x / self._scale) * self._scale
+        y = self._home_y
         if self.pet.pos() != QPoint(x, y):
             self.pet.move(x, y)
             if self.bubble.isVisible():
@@ -297,44 +290,53 @@ class DesktopApp(QObject):
     def _place_bubble(self) -> None:
         self.bubble.place_above(self.pet.geometry(), self._screen_rect())
 
-    # --- домик ---
+    # --- место персонажа ---
 
-    def _house_moved(self) -> None:
-        home_x, bounds = self._home_geometry()
-        self.brain.set_home(home_x, bounds)
+    def _pet_dragged(self) -> None:
+        """Енота тащат мышью: где окно, там и его место."""
+        self._home_y = self.pet.y()
+        self.brain.bounds = self._bounds()
+        self.brain.place(float(self.pet.x()))
         self._after_brain_change()
+        if self.bubble.isVisible():
+            self._place_bubble()
 
-    def _home_geometry(self) -> tuple[float, Bounds]:
+    def _pet_size(self) -> QSize:
+        return QSize(self.character.width * self._scale, self.character.height * self._scale)
+
+    def _bounds(self) -> Bounds:
         screen = self._screen_rect()
-        home_x = self.house.x() + self.home_offset[0]
-        width = self.character.width * self._scale
-        return float(home_x), Bounds(screen.left(), screen.right() + 1 - width)
+        return Bounds(screen.left(), screen.right() + 1 - self._pet_size().width())
 
     def _screen_rect(self) -> QRect:
-        screen = QGuiApplication.screenAt(self.house.geometry().center())
-        screen = screen or QGuiApplication.primaryScreen()
+        center = QRect(self.pet.pos(), self._pet_size()).center()
+        screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
         return screen.availableGeometry()
 
-    def _restore_house_position(self) -> None:
-        saved = self._state.get("house_pos")
+    def _restore_position(self) -> tuple[int, int]:
+        """Место енота: сохранённое, затем место у старого домика, иначе правый нижний угол."""
+        size = self._pet_size()
+        saved = self._state.get("pet_pos")
+        if not saved and (house := self._state.get("house_pos")):
+            saved = [
+                house[0] + YARD_X * self._scale,
+                house[1] + (GROUND_ROW + 1 - self.character.height) * self._scale,
+            ]
         if saved:
             point = QPoint(int(saved[0]), int(saved[1]))
-            rect = QRect(point, self.house.size())
+            rect = QRect(point, size)
             if any(s.availableGeometry().intersects(rect) for s in QGuiApplication.screens()):
-                self.house.move(point)
-                return
+                return point.x(), point.y()
         area = QGuiApplication.primaryScreen().availableGeometry()
-        overhang = max(0, YARD_X + self.character.width - HOUSE_SIZE[0]) * self._scale
-        self.house.move(
-            area.right() + 1 - self.house.width() - overhang - 24,
-            area.bottom() + 1 - self.house.height(),
+        return (
+            area.right() + 1 - size.width() - START_MARGIN,
+            area.bottom() + 1 - size.height(),
         )
 
-    def _save_house_position(self) -> None:
-        self._state.set("house_pos", [self.house.x(), self.house.y()])
+    def _save_position(self) -> None:
+        self._state.set("pet_pos", [round(self.brain.home_x), self._home_y])
 
     def _show_windows(self) -> None:
-        self.house.show()
         self._place_pet()
         self.pet.show()
         self.pet.raise_()
@@ -345,7 +347,8 @@ class DesktopApp(QObject):
         except Exception:  # мониторинг не должен ронять приложение
             log.exception("не удалось прочитать RAM")
             return
-        self.house.set_ram(self._ram)
+        if self.tray is not None:
+            self.tray.setToolTip(f"cloDICK · RAM {self._ram}%")
 
     # --- меню и трей ---
 

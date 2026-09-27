@@ -64,8 +64,15 @@ class Brain:
         """Нужны ли частые обновления: персонаж двигается или машет."""
         return self.mode in (Mode.WALK, Mode.WAVE)
 
+    def place(self, x: float) -> None:
+        """Персонажа перетащили мышью: где отпустили, там теперь его место."""
+        self.home_x = self.x = x
+        self._outside = False
+        self._target = None
+        self._sit()
+
     def set_home(self, home_x: float, bounds: Bounds) -> None:
-        """Домик передвинули. Енот дома переезжает вместе с ним."""
+        """Сменилось место или границы. Если персонаж на месте, он остаётся там."""
         self.home_x = home_x
         self.bounds = bounds
         if self.at_home:

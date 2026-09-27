@@ -19,10 +19,10 @@ from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QApplication
 
 from clodick.characters import builtin_dir, load_character
-from clodick.desktop.art import GROUND_ROW, YARD_X
+from clodick.desktop.art import GROUND_ROW, RAM_SIGN, YARD_X
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import SERIF, THEMES
-from clodick.desktop.widgets import RAM_SIGN, make_font
+from clodick.desktop.widgets import make_font
 
 FRIENDS = [
     ("Марк", 3, 12),

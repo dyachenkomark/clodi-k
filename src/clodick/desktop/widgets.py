@@ -1,4 +1,4 @@
-"""Окна: домик, персонаж, пузырь с текстом, чек-лист дня."""
+"""Окна: персонаж, пузырь с текстом, чек-лист дня."""
 
 from __future__ import annotations
 
@@ -30,23 +30,22 @@ OVERLAY_FLAGS = (
     | Qt.WindowType.WindowDoesNotAcceptFocus
 )
 
-# Где на стене домика висит табличка с RAM, в пикселях арта: x, y, ширина, высота.
-RAM_SIGN = (5, 14, 19, 4)
 
+class PetWindow(QWidget):
+    """Прозрачное окно персонажа поверх всех окон.
 
-class SpriteWindow(QWidget):
-    """Прозрачное окно поверх всех окон, рисует одну картинку."""
+    Клик — сигнал clicked, перетаскивание двигает окно и шлёт drag_moved.
+    """
 
     clicked = Signal()
     context_requested = Signal(QPoint)
     drag_moved = Signal()
     drag_finished = Signal()
 
-    def __init__(self, *, draggable: bool) -> None:
+    def __init__(self) -> None:
         super().__init__(None, OVERLAY_FLAGS)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self._draggable = draggable
         self._pixmap: QPixmap | None = None
         self._press: QPoint | None = None
         self._grab_offset = QPoint()
@@ -61,10 +60,6 @@ class SpriteWindow(QWidget):
         painter = QPainter(self)
         if self._pixmap is not None:
             painter.drawPixmap(0, 0, self._pixmap)
-        self.paint_overlay(painter)
-
-    def paint_overlay(self, painter: QPainter) -> None:
-        pass
 
     def mousePressEvent(self, event) -> None:
         pos = event.globalPosition().toPoint()
@@ -76,7 +71,7 @@ class SpriteWindow(QWidget):
             self.context_requested.emit(pos)
 
     def mouseMoveEvent(self, event) -> None:
-        if self._press is None or not self._draggable:
+        if self._press is None:
             return
         pos = event.globalPosition().toPoint()
         if not self._dragging and (pos - self._press).manhattanLength() > 4:
@@ -94,48 +89,6 @@ class SpriteWindow(QWidget):
             self.clicked.emit()
         self._press = None
         self._dragging = False
-
-
-class HouseWindow(SpriteWindow):
-    """Домик с табличкой, на которой написана загрузка RAM."""
-
-    def __init__(self, pixmap: QPixmap, scale: int, theme: Theme = THEMES["classic"]) -> None:
-        super().__init__(draggable=True)
-        self._scale = scale
-        self._theme = theme
-        self._ram: int | None = None
-        self.set_pixmap(pixmap)
-
-    def set_ram(self, percent: int) -> None:
-        if percent != self._ram:
-            self._ram = percent
-            self.update()
-
-    def paint_overlay(self, painter: QPainter) -> None:
-        if self._ram is None:
-            return
-        x, y, w, h = (v * self._scale for v in RAM_SIGN)
-        rect = QRect(x, y, w, h)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(self._theme.sign_border), max(1, self._scale // 2)))
-        painter.setBrush(QColor(self._theme.sign_bg))
-        painter.drawRoundedRect(rect, self._scale, self._scale)
-        text = f"RAM {self._ram}%"
-        font = QFont()
-        font.setBold(True)
-        size = max(7, int(h * 0.7))
-        font.setPixelSize(size)
-        while size > 7 and QFontMetrics(font).horizontalAdvance(text) > w - 2 * self._scale:
-            size -= 1
-            font.setPixelSize(size)
-        painter.setFont(font)
-        painter.setPen(QColor(self._theme.sign_text))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
-
-
-class PetWindow(SpriteWindow):
-    def __init__(self) -> None:
-        super().__init__(draggable=False)
 
 
 class BubbleWindow(QWidget):

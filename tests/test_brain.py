@@ -122,3 +122,15 @@ def test_no_room_to_walk():
     brain = Brain(10, Bounds(0, 50), speed=40.0, rng=ScriptedRng([0.1] * 10))
     run(brain, 600, step=1.0)
     assert brain.at_home
+
+
+def test_place_makes_new_home_and_stops_walk():
+    brain = make_brain()
+    brain._outside = True
+    brain._walk_to(100.0)
+    brain.place(300.0)
+    assert brain.x == brain.home_x == 300.0
+    assert brain.at_home
+    assert brain.mode is Mode.SIT
+    run(brain, 1)
+    assert brain.x == 300.0

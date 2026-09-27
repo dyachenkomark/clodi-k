@@ -53,20 +53,21 @@ def make_desktop(qapp, config, repo):
 
     yield factory
     for desktop in created:
-        for window in (desktop.house, desktop.pet, desktop.bubble, desktop.checklist):
+        for window in (desktop.pet, desktop.bubble, desktop.checklist):
             window.close()
             window.deleteLater()
     qapp.processEvents()
 
 
-def test_starts_with_house_and_raccoon(make_desktop):
+def test_starts_with_raccoon_above_taskbar(make_desktop):
     desktop, _, _ = make_desktop()
-    assert desktop.house.isVisible()
     assert desktop.pet.isVisible()
-    dx, dy = desktop.home_offset
-    assert desktop.pet.x() == desktop.house.x() + dx
-    assert desktop.pet.y() == desktop.house.y() + dy
-    assert desktop.house._ram == 42
+    area = desktop._screen_rect()
+    assert desktop.pet.geometry().bottom() == area.bottom()
+    assert desktop.pet.geometry().right() < area.right()
+    assert desktop._ram == 42
+    if desktop.tray is not None:
+        assert "RAM 42%" in desktop.tray.toolTip()
 
 
 def test_checklist_marks_task(make_desktop):
@@ -112,21 +113,34 @@ def test_reminders_can_be_turned_off(make_desktop):
 def test_hide_and_show(make_desktop):
     desktop, _, _ = make_desktop()
     desktop.set_visible(False)
-    assert not desktop.house.isVisible()
     assert not desktop.pet.isVisible()
     desktop.set_visible(True)
-    assert desktop.house.isVisible()
+    assert desktop.pet.isVisible()
 
 
-def test_house_position_is_remembered(make_desktop):
+def test_dragged_raccoon_stays_and_is_remembered(make_desktop):
     first, _, _ = make_desktop()
-    first.house.move(100, 200)
-    first.house.drag_moved.emit()
-    first.house.drag_finished.emit()
-    assert first.pet.x() == 100 + first.home_offset[0]
+    first.brain._walk_to(first.brain.x - 200)
+    first.brain._outside = True
+    first.pet.move(100, 200)
+    first.pet.drag_moved.emit()
+    first.pet.drag_finished.emit()
+    assert first.brain.at_home
+    assert first.brain.mode is Mode.SIT
+    assert (first.pet.x(), first.pet.y()) == (100, 200)
 
     second, _, _ = make_desktop()
-    assert (second.house.x(), second.house.y()) == (100, 200)
+    assert (second.pet.x(), second.pet.y()) == (100, 200)
+    assert second.brain.home_x == 100
+
+
+def test_raccoon_moves_to_where_old_house_stood(make_desktop):
+    first, _, _ = make_desktop()
+    first._state.set("house_pos", [100, 200])
+    second, _, _ = make_desktop()
+    scale = second._scale
+    assert second.pet.x() == 100 + 36 * scale
+    assert second.pet.y() + second.pet.height() == 200 + 30 * scale
 
 
 def test_walking_moves_window(make_desktop):
@@ -146,7 +160,7 @@ def test_every_theme_starts(make_desktop, theme):
     assert desktop.theme.key == theme
     desktop.open_checklist()
     desktop.say("проверка")
-    assert not desktop.house.grab().isNull()
+    assert not desktop.pet.grab().isNull()
     assert not desktop.checklist.grab().isNull()
 
 
@@ -168,11 +182,11 @@ def test_switch_character_at_runtime(make_desktop):
     _write_blob(paths.data_dir() / "characters" / "blob")
     desktop, _, _ = make_desktop()
     assert "blob" in desktop.characters
+    feet = desktop.pet.y() + desktop.pet.height()
     desktop.set_character("blob")
     assert desktop.character.id == "blob"
-    scale = desktop._scale
-    assert desktop.pet.size().width() == 4 * scale
-    assert desktop.pet.y() + desktop.pet.height() == desktop.house.y() + 30 * scale
+    assert desktop.pet.size().width() == 4 * desktop._scale
+    assert desktop.pet.y() + desktop.pet.height() == feet
 
     again, _, _ = make_desktop()
     assert again.character.id == "blob"

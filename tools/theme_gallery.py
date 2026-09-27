@@ -72,23 +72,19 @@ def render_tile(app, config, conn, theme_key: str) -> QImage:
     p.setPen(QColor(theme.muted))
     p.drawText(QRect(20, 42, 400, 20), Qt.AlignmentFlag.AlignLeft, f'theme = "{theme_key}"')
 
-    house = desktop.house.grab()
     raccoon = desktop.pet.grab()
     bubble = desktop.bubble.grab()
     checklist = desktop.checklist.grab()
 
-    hx = TILE_W - house.width() - 20
-    hy = TILE_H - house.height() - 10
-    p.drawPixmap(hx, hy, house)
-    rx = hx + desktop.home_offset[0]
-    ry = hy + desktop.home_offset[1]
+    rx = TILE_W - raccoon.width() - 40
+    ry = TILE_H - raccoon.height() - 10
     p.drawPixmap(rx, ry, raccoon)
     bx = min(rx + raccoon.width() // 2 - bubble.width() // 2, TILE_W - bubble.width() - 8)
     p.drawPixmap(bx, ry - bubble.height() + 2, bubble)
     p.drawPixmap(20, TILE_H - checklist.height() - 14, checklist)
     p.end()
 
-    for window in (desktop.house, desktop.pet, desktop.bubble, desktop.checklist):
+    for window in (desktop.pet, desktop.bubble, desktop.checklist):
         window.close()
     return tile
 
