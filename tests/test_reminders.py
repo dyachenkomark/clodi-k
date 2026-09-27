@@ -41,11 +41,11 @@ def test_clock_going_back_does_not_refire():
 def _status(done):
     items = tuple(
         CategoryStatus(Category(key, title), key in done)
-        for key, title in [("sport", "Спорт"), ("language", "Язык")]
+        for key, title in [("sport", "Sport"), ("language", "Call Anna")]
     )
     return DayStatus(date(2026, 9, 26), items)
 
 
 def test_reminder_text_lists_pending():
-    assert reminder_text(_status({"sport"})) == "Эй! Ещё не сделано: язык."
+    assert reminder_text(_status({"sport"})) == "Hey! Still to do: Call Anna."
     assert reminder_text(_status({"sport", "language"})) is None

@@ -25,13 +25,13 @@ log = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="clodick", description="cloDICK — задачи дня")
+    parser = argparse.ArgumentParser(prog="clodick", description="cloDICK — daily tasks")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("status", help="показать статус дня")
-    done = sub.add_parser("done", help="отметить направление выполненным")
+    sub.add_parser("status", help="show today's status")
+    done = sub.add_parser("done", help="mark an item done")
     done.add_argument("key")
-    undo = sub.add_parser("undo", help="снять отметку")
+    undo = sub.add_parser("undo", help="unmark an item")
     undo.add_argument("key")
     return parser
 
@@ -42,7 +42,7 @@ def format_status(status: DayStatus) -> str:
         mark = "[x]" if item.done else "[ ]"
         lines.append(f"  {mark} {item.category.title} ({item.category.key})")
     if status.all_done:
-        lines.append("Всё сделано!")
+        lines.append("All done!")
     return "\n".join(lines)
 
 
@@ -72,11 +72,11 @@ def _run_cli(args: argparse.Namespace, tracker: Tracker) -> int:
     try:
         if args.command == "done":
             if not tracker.mark_done(args.key, source="cli"):
-                print("Уже отмечено сегодня.")
+                print("Already marked today.")
             log.info("done %s", args.key)
         elif args.command == "undo":
             if not tracker.unmark(args.key):
-                print("Отметки не было.")
+                print("It was not marked.")
             log.info("undo %s", args.key)
     except KeyError as exc:
         print(exc.args[0], file=sys.stderr)

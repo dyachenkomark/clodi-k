@@ -35,15 +35,15 @@ character = "raccoon"
 
 [[categories]]
 key = "sport"
-title = "Спорт"
+title = "Sport"
 
 [[categories]]
 key = "study"
-title = "Учёба"
+title = "Study"
 
 [[categories]]
 key = "language"
-title = "Язык"
+title = "Language"
 # Ссылка на сайт с уроками. Появится кнопка «открыть сайт».
 url = ""
 """
@@ -68,13 +68,6 @@ class Config:
     daily_goal_minutes: int = 15
     reminders: tuple[str, ...] = field(default_factory=tuple)
     desktop: DesktopConfig = field(default_factory=DesktopConfig)
-
-    def category(self, key: str) -> Category:
-        for cat in self.categories:
-            if cat.key == key:
-                return cat
-        known = ", ".join(c.key for c in self.categories)
-        raise KeyError(f"Неизвестное направление «{key}». Есть: {known}")
 
 
 def load_config(path: Path) -> Config:

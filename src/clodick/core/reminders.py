@@ -42,7 +42,7 @@ class ReminderClock:
 
 
 def pending_titles(status: DayStatus) -> list[str]:
-    return [item.category.title.lower() for item in status.items if not item.done]
+    return [item.category.title for item in status.items if not item.done]
 
 
 def reminder_text(status: DayStatus) -> str | None:
@@ -50,14 +50,14 @@ def reminder_text(status: DayStatus) -> str | None:
     pending = pending_titles(status)
     if not pending:
         return None
-    return f"Эй! Ещё не сделано: {', '.join(pending)}."
+    return f"Hey! Still to do: {', '.join(pending)}."
 
 
 def greeting_text(status: DayStatus) -> str | None:
     pending = pending_titles(status)
     if not pending:
         return None
-    return f"Привет! На сегодня: {', '.join(pending)}."
+    return f"Hi! Today: {', '.join(pending)}."
 
 
-DONE_TEXT = "Всё сделано на сегодня. Горжусь!"
+DONE_TEXT = "All done for today. Proud of you!"

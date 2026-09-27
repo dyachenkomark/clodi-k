@@ -8,11 +8,36 @@ from datetime import date, datetime
 
 @dataclass(frozen=True)
 class Category:
-    """Направление: спорт, учёба, язык и т. д."""
+    """Пункт чек-листа: направление из настроек или своя задача из чек-листа."""
 
     key: str
     title: str
     url: str | None = None
+    daily: bool = True
+    # Своя задача: добавлена из чек-листа, её можно удалить.
+    custom: bool = False
+
+
+TASK_PREFIX = "task:"
+
+
+def task_key(task_id: int) -> str:
+    return f"{TASK_PREFIX}{task_id}"
+
+
+def task_id(key: str) -> int | None:
+    """task:7 → 7. Для направлений из настроек — None."""
+    if not key.startswith(TASK_PREFIX):
+        return None
+    rest = key.removeprefix(TASK_PREFIX)
+    return int(rest) if rest.isdigit() else None
+
+
+@dataclass(frozen=True)
+class Task:
+    id: int
+    title: str
+    daily: bool
 
 
 @dataclass(frozen=True)

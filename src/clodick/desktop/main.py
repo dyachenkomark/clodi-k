@@ -26,7 +26,9 @@ def run(config: Config, tracker: Tracker, state: StateStore) -> int:
     lock = QLockFile(str(paths.data_dir() / "clodick.lock"))
     lock.setStaleLockTime(0)
     if not lock.tryLock(100):
-        QMessageBox.information(None, "cloDICK", "cloDICK уже запущен. Ищите его в трее.")
+        QMessageBox.information(
+            None, "cloDICK", "cloDICK is already running. Look for it in the tray."
+        )
         return 1
 
     sys.excepthook = _log_exception

@@ -99,7 +99,7 @@ def test_reminder_shows_pending(make_desktop):
     clock.now = datetime(2026, 9, 26, 10, 0, 30)
     desktop.check_reminders_now()
     assert desktop.bubble.isVisible()
-    assert desktop.bubble.text == "Эй! Ещё не сделано: учёба, язык."
+    assert desktop.bubble.text == "Hey! Still to do: Study, Language."
 
 
 def test_reminders_can_be_turned_off(make_desktop):
@@ -221,3 +221,22 @@ def test_png_sheet_character(qapp, tmp_path):
     assert first.size().width() == 6
     assert first.pixelColor(0, 0) == QColor("#d97757")
     assert second.pixelColor(0, 0) == QColor("#141413")
+
+
+def test_add_and_remove_task_from_checklist(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    desktop.open_checklist()
+    assert desktop.checklist._title.text() == "Today, Sep 26"
+    desktop.checklist.new_task.setText("Buy milk")
+    desktop.checklist.new_task.returnPressed.emit()
+    assert desktop.checklist.new_task.text() == ""
+    key = next(k for k in desktop.checklist.boxes if k.startswith("task:"))
+    assert desktop.checklist.boxes[key].text() == "Buy milk"
+    assert set(desktop.checklist.remove_buttons) == {key}
+
+    desktop.checklist.boxes[key].setChecked(True)
+    assert tracker.status().done_count == 1
+
+    desktop.checklist.remove_buttons[key].click()
+    assert key not in desktop.checklist.boxes
+    assert tracker.status().total == 3

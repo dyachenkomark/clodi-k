@@ -48,7 +48,7 @@ def main(out: str) -> None:
     if "--checklist" in sys.argv:
         desktop.open_checklist()
     else:
-        desktop.say("Эй! Ещё не сделано: спорт, учёба.")
+        desktop.say("Hey! Still to do: Sport, Study.")
     app.processEvents()
 
     screen = QGuiApplication.primaryScreen().geometry()

@@ -17,11 +17,20 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX completions_day ON completions (day);
     """,
-    # 2: состояние интерфейса: позиция домика, переключатели из трея.
+    # 2: состояние интерфейса: место персонажа, переключатели из трея.
     """
     CREATE TABLE kv (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL  -- JSON
+    );
+    """,
+    # 3: свои задачи, добавленные из чек-листа. Отметки лежат в completions с ключом task:<id>.
+    """
+    CREATE TABLE tasks (
+        id         INTEGER PRIMARY KEY,
+        title      TEXT NOT NULL,
+        daily      INTEGER NOT NULL,  -- 1: каждый день, 0: разовая
+        created_at TEXT NOT NULL      -- ISO 8601
     );
     """,
 ]

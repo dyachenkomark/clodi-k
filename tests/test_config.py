@@ -11,7 +11,8 @@ def test_first_run_writes_default_config(tmp_path):
     assert config.day_start_hour == 4
     assert config.daily_goal_minutes == 15
     assert config.reminders == ("10:00", "15:00", "20:00")
-    assert config.category("language").url is None
+    assert config.categories[2].url is None
+    assert [c.title for c in config.categories] == ["Sport", "Study", "Language"]
 
 
 def test_broken_toml_raises_config_error(tmp_path):

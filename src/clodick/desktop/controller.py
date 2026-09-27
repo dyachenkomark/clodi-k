@@ -105,6 +105,8 @@ class DesktopApp(QObject):
         self.pet.drag_finished.connect(self._save_position)
         self.pet.context_requested.connect(self._show_menu)
         self.checklist.toggled.connect(self._toggle)
+        self.checklist.task_added.connect(self._add_task)
+        self.checklist.task_removed.connect(self._remove_task)
 
         self.menu = self._build_menu()
         self.tray = self._build_tray()
@@ -215,6 +217,21 @@ class DesktopApp(QObject):
         log.info("%s %s через окно", "done" if checked else "undo", key)
         if checked and status.all_done:
             self.say(DONE_TEXT, seconds=6)
+
+    def _add_task(self, title: str, daily: bool) -> None:
+        task = self._tracker.add_task(title, daily)
+        log.info("своя задача %s: %s", "ежедневная" if daily else "разовая", task.id)
+        self._refresh_checklist()
+
+    def _remove_task(self, key: str) -> None:
+        if self._tracker.remove_task(key):
+            log.info("задача удалена: %s", key)
+        self._refresh_checklist()
+
+    def _refresh_checklist(self) -> None:
+        """Список изменился: перерисовать и заново прижать к еноту, размер мог поменяться."""
+        self.checklist.set_status(self._tracker.status(), self._ram)
+        self.checklist.open_near(self.pet.geometry(), self._screen_rect())
 
     def _greet(self) -> None:
         if not self._reminders_on:
@@ -354,10 +371,10 @@ class DesktopApp(QObject):
 
     def _build_menu(self) -> QMenu:
         menu = QMenu()
-        menu.addAction("Чек-лист дня", self.open_checklist)
+        menu.addAction("Today's checklist", self.open_checklist)
         menu.addSeparator()
         self._character_actions = QActionGroup(menu)
-        characters_menu = menu.addMenu("Персонаж")
+        characters_menu = menu.addMenu("Character")
         for character in sorted(self.characters.values(), key=lambda c: c.name):
             action = QAction(character.name, characters_menu, checkable=True)
             action.setData(character.id)
@@ -365,19 +382,19 @@ class DesktopApp(QObject):
             action.triggered.connect(lambda _=False, cid=character.id: self.set_character(cid))
             self._character_actions.addAction(action)
             characters_menu.addAction(action)
-        self._visible_action = QAction("Показывать персонажа", menu, checkable=True)
+        self._visible_action = QAction("Show character", menu, checkable=True)
         self._visible_action.setChecked(not self._state.get("hidden", False))
         self._visible_action.toggled.connect(self.set_visible)
-        self._walks_action = QAction("Отпускать гулять", menu, checkable=True)
+        self._walks_action = QAction("Let it walk", menu, checkable=True)
         self._walks_action.setChecked(self.brain.walks)
         self._walks_action.toggled.connect(self.set_walks)
-        self._reminders_action = QAction("Напоминания", menu, checkable=True)
+        self._reminders_action = QAction("Reminders", menu, checkable=True)
         self._reminders_action.setChecked(self._reminders_on)
         self._reminders_action.toggled.connect(self.set_reminders)
         for action in (self._visible_action, self._walks_action, self._reminders_action):
             menu.addAction(action)
         menu.addSeparator()
-        menu.addAction("Выход", self.quit)
+        menu.addAction("Quit", self.quit)
         return menu
 
     def _build_tray(self) -> QSystemTrayIcon | None:

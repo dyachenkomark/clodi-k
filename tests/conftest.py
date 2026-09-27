@@ -21,9 +21,9 @@ def config():
             "day_start_hour": 4,
             "reminders": ["10:00", "20:00"],
             "categories": [
-                {"key": "sport", "title": "Спорт"},
-                {"key": "study", "title": "Учёба"},
-                {"key": "language", "title": "Язык", "url": "https://example.com"},
+                {"key": "sport", "title": "Sport"},
+                {"key": "study", "title": "Study"},
+                {"key": "language", "title": "Language", "url": "https://example.com"},
             ],
         }
     )

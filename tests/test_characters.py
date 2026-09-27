@@ -32,7 +32,7 @@ def minimal_pack(folder, char_id="blob", extra=""):
 
 def test_builtin_raccoon_is_valid():
     raccoon = load_character(builtin_dir() / DEFAULT_CHARACTER)
-    assert raccoon.name == "Енот"
+    assert raccoon.name == "Raccoon"
     assert (raccoon.width, raccoon.height) == (22, 18)
     for name in REQUIRED_ANIMATIONS:
         assert raccoon.animations[name].frame_count >= 1

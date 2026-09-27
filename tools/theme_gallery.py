@@ -49,7 +49,7 @@ def render_tile(app, config, conn, theme_key: str) -> QImage:
         app, cfg, tracker, StateStore(conn), ram_reader=lambda: 63, rng=random.Random(1)
     )
     desktop.start()
-    desktop.say("Эй! Ещё не сделано: спорт, учёба.")
+    desktop.say("Hey! Still to do: Sport, Study.")
     desktop.brain.mode = Mode.WAVE
     desktop._apply_frame(restart=True)
     desktop.checklist.set_status(tracker.status(), 63)

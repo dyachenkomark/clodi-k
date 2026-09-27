@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from clodick.core.models import DayStatus
 from clodick.desktop.themes import THEMES, Theme
@@ -192,13 +201,34 @@ QCheckBox::indicator {{
 }}
 QCheckBox::indicator:checked {{ background: {t.accent}; border-color: {t.accent}; }}
 QCheckBox::indicator:hover {{ border-color: {t.text}; }}
+QCheckBox#daily {{ color: {t.muted}; font-size: 12px; spacing: 6px; }}
+QCheckBox#daily::indicator {{ width: 10px; height: 10px; border-radius: 3px; }}
+QLineEdit {{
+    color: {t.text}; background: {t.box_bg}; font-size: 13px; font-family: {t.body_font};
+    border: 1px solid {t.muted}; border-radius: 6px; padding: 3px 6px;
+}}
+QLineEdit:focus {{ border-color: {t.accent}; }}
+QToolButton#remove {{
+    color: {t.muted}; background: transparent; border: none; font-size: 20px;
+    font-family: {t.body_font}; min-width: 18px; padding: 0;
+}}
+QToolButton#remove:hover {{ color: {t.text}; }}
 """
 
 
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
 class ChecklistPopup(QWidget):
-    """Чек-лист дня. Закрывается кликом мимо."""
+    """Чек-лист дня. Закрывается кликом мимо.
+
+    Внизу строка для своей задачи: Enter добавляет её, галочка daily — каждый день.
+    У своих задач справа крестик, он удаляет задачу.
+    """
 
     toggled = Signal(str, bool)
+    task_added = Signal(str, bool)
+    task_removed = Signal(str)
 
     def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -219,6 +249,16 @@ class ChecklistPopup(QWidget):
 
         self._items = QVBoxLayout()
         self._items.setSpacing(2)
+
+        self.new_task = QLineEdit(placeholderText="Add a task…")
+        self.new_task.returnPressed.connect(self._submit)
+        self.new_task_daily = QCheckBox("daily", objectName="daily")
+        self.new_task_daily.setToolTip("Repeat every day")
+        adder = QHBoxLayout()
+        adder.setSpacing(8)
+        adder.addWidget(self.new_task, 1)
+        adder.addWidget(self.new_task_daily)
+
         self._footer = QLabel(objectName="footer")
 
         layout = QVBoxLayout(panel)
@@ -226,16 +266,19 @@ class ChecklistPopup(QWidget):
         layout.setSpacing(8)
         layout.addLayout(header)
         layout.addLayout(self._items)
+        layout.addLayout(adder)
         layout.addWidget(self._footer)
         self._boxes: dict[str, QCheckBox] = {}
-        self.setMinimumWidth(220)
+        self._rows: list[QWidget] = []
+        self.remove_buttons: dict[str, QToolButton] = {}
+        self.setMinimumWidth(240)
 
     @property
     def boxes(self) -> dict[str, QCheckBox]:
         return self._boxes
 
     def set_status(self, status: DayStatus, ram: int | None) -> None:
-        self._title.setText(f"Сегодня, {status.day:%d.%m}")
+        self._title.setText(f"Today, {MONTHS[status.day.month - 1]} {status.day.day}")
         self._progress.setText(f"{status.done_count}/{status.total}")
         keys = [item.category.key for item in status.items]
         if list(self._boxes) != keys:
@@ -245,7 +288,7 @@ class ChecklistPopup(QWidget):
             box.blockSignals(True)
             box.setChecked(item.done)
             box.blockSignals(False)
-        self._footer.setText("" if ram is None else f"Оперативная память: {ram}%")
+        self._footer.setText("" if ram is None else f"RAM: {ram}%")
         self.adjustSize()
 
     def open_near(self, anchor: QRect, screen_rect: QRect) -> None:
@@ -260,15 +303,36 @@ class ChecklistPopup(QWidget):
         self.show()
         self.activateWindow()
 
+    def _submit(self) -> None:
+        title = self.new_task.text().strip()
+        if not title:
+            return
+        self.new_task.clear()
+        self.task_added.emit(title, self.new_task_daily.isChecked())
+
     def _rebuild(self, status: DayStatus) -> None:
-        for box in self._boxes.values():
-            self._items.removeWidget(box)
-            box.deleteLater()
+        for row in self._rows:
+            self._items.removeWidget(row)
+            row.deleteLater()
+        self._rows = []
         self._boxes = {}
+        self.remove_buttons = {}
         for item in status.items:
+            key = item.category.key
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
             box = QCheckBox(item.category.title)
             box.setCursor(Qt.CursorShape.PointingHandCursor)
-            key = item.category.key
             box.toggled.connect(lambda checked, key=key: self.toggled.emit(key, checked))
-            self._items.addWidget(box)
+            line.addWidget(box, 1)
+            if item.category.custom:
+                remove = QToolButton(objectName="remove", text="×")
+                remove.setToolTip("Delete task")
+                remove.setCursor(Qt.CursorShape.PointingHandCursor)
+                remove.clicked.connect(lambda _=False, key=key: self.task_removed.emit(key))
+                line.addWidget(remove)
+                self.remove_buttons[key] = remove
+            self._items.addWidget(row)
+            self._rows.append(row)
             self._boxes[key] = box

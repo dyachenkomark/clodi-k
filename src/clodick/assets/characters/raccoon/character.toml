@@ -1,8 +1,8 @@
 # Персонаж cloDICK. Формат описан в docs/CHARACTERS.md.
 id = "raccoon"
-name = "Енот"
+name = "Raccoon"
 author = "cloDICK"
-description = "Серый енот в маске, любит гулять вдоль панели задач."
+description = "A grey masked raccoon who likes to stroll along the taskbar."
 # Размер кадра в пикселях арта: ширина, высота.
 size = [22, 18]
 
