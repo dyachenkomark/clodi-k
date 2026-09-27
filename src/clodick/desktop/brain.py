@@ -34,18 +34,18 @@ class Bounds:
 
 
 # Сколько секунд длится каждое занятие: (минимум, максимум).
-SIT_AT_HOME = (60.0, 150.0)
+SIT_AT_HOME = (15.0, 45.0)
 SIT_OUTSIDE = (4.0, 10.0)
-SLEEP = (60.0, 180.0)
-WALK_CHANCE = 0.35
-SLEEP_CHANCE = 0.2
+SLEEP = (45.0, 120.0)
+WALK_CHANCE = 0.4
+SLEEP_CHANCE = 0.15
 # Ночью персонаж сонный: чаще спит, реже гуляет.
 NIGHT_WALK_CHANCE = 0.1
 NIGHT_SLEEP_CHANCE = 0.6
 # Во сколько раз быстрее обычного шага он отбегает от курсора.
 RUSH = 4.0
 # Шанс повозиться (потереть лапки, потянуться) и сколько это длится.
-FIDGET_CHANCE = 0.25
+FIDGET_CHANCE = 0.3
 FIDGET = (2.5, 4.0)
 
 

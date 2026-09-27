@@ -73,6 +73,18 @@ EAT_SECONDS = 3.0
 BELLY_MODES = (Mode.SIT, Mode.SLEEP, Mode.WAVE)
 
 
+def crosses(rect: QRect, start: QPoint, end: QPoint) -> bool:
+    """Проходит ли отрезок start–end через rect. Быстрый курсор между замерами пролетает
+    зону целиком, поэтому смотрим весь путь, а не одну точку."""
+    steps = max(1, (end - start).manhattanLength() // 4)
+    for i in range(steps + 1):
+        x = start.x() + (end.x() - start.x()) * i // steps
+        y = start.y() + (end.y() - start.y()) * i // steps
+        if rect.contains(x, y):
+            return True
+    return False
+
+
 class DesktopApp(QObject):
     def __init__(
         self,
@@ -415,10 +427,11 @@ class DesktopApp(QObject):
         if (
             speed > DODGE_SPEED
             and now >= self._dodge_ready
-            and mode in (Mode.SIT, Mode.SLEEP)
-            and rect.adjusted(-16, -16, 16, 16).contains(pos)
+            and mode not in (Mode.WALK, Mode.WAVE)
+            and crosses(rect.adjusted(-16, -16, 16, 16), last, pos)
         ):
-            away = 1 if pos.x() < rect.center().x() else -1
+            # Курсор будто толкает: енот отбегает туда, куда тот летел.
+            away = 1 if last.x() < rect.center().x() else -1
             distance = rect.width() * 1.5
             self.brain.dodge(self.brain.x + away * distance)
             if self.brain.mode is not Mode.WALK:

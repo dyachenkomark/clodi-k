@@ -350,3 +350,15 @@ def test_raccoon_looks_at_nearby_cursor(playful_desktop):
     cursor.pos = rect.center() + QPoint(2000, 0)
     desktop._watch_cursor(now=14.0)
     assert desktop._look is None
+
+
+def test_dodge_catches_cursor_that_jumps_over_raccoon_between_polls(playful_desktop):
+    desktop, cursor = playful_desktop
+    rect = desktop.pet.geometry()
+    y = rect.center().y()
+    cursor.pos = QPoint(rect.left() - 150, y)
+    desktop._watch_cursor(now=10.0)
+    cursor.pos = QPoint(rect.right() + 150, y)
+    desktop._watch_cursor(now=10.1)
+    assert desktop.brain.mode is Mode.WALK
+    assert desktop.brain.facing == 1
