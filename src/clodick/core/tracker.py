@@ -6,7 +6,15 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
 from clodick.config import Config
-from clodick.core.models import Category, CategoryStatus, DayStatus, Task, task_id, task_key
+from clodick.core.models import (
+    Category,
+    CategoryStatus,
+    DayStatus,
+    Note,
+    Task,
+    task_id,
+    task_key,
+)
 from clodick.storage.repository import CompletionRepository
 
 Clock = Callable[[], datetime]
@@ -31,8 +39,16 @@ class Tracker:
     def status(self, day: date | None = None) -> DayStatus:
         day = day or self.today()
         done = self._repo.completions_for(day)
+        notes: dict[str, list[Note]] = {}
+        for note in self._repo.notes_between(day, day):
+            notes.setdefault(note.key, []).append(note)
         items = tuple(
-            CategoryStatus(category=cat, done=cat.key in done, done_at=done.get(cat.key))
+            CategoryStatus(
+                category=cat,
+                done=cat.key in done,
+                done_at=done.get(cat.key),
+                notes=tuple(notes.get(cat.key, ())),
+            )
             for cat in self._items(day)
         )
         return DayStatus(day=day, items=items)
@@ -57,6 +73,18 @@ class Tracker:
     def remove_task(self, key: str) -> bool:
         tid = task_id(key)
         return tid is not None and self._repo.remove_task(tid)
+
+    def add_note(self, key: str, text: str, source: str = "cli") -> Note:
+        """Заметка к пункту сегодняшнего чек-листа: результат, комментарий."""
+        self._check_key(key)
+        text = text.strip()
+        if not text:
+            raise ValueError("Note is empty")
+        title = self.title_of(key) or key
+        return self._repo.add_note(self.today(), key, title, text, self._clock(), source)
+
+    def delete_note(self, note_id: int) -> bool:
+        return self._repo.delete_note(note_id)
 
     def add_focus(self, key: str | None, started_at: datetime, minutes: int) -> None:
         """Записать законченный фокус Pomodoro. День считается по моменту начала."""

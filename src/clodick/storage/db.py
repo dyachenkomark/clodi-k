@@ -44,6 +44,19 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX focus_sessions_day ON focus_sessions (day);
     """,
+    # 5: заметки к пунктам чек-листа: результаты, комментарии. Несколько на пункт в день.
+    """
+    CREATE TABLE notes (
+        id         INTEGER PRIMARY KEY,
+        day        TEXT NOT NULL,  -- логический день, ГГГГ-ММ-ДД
+        item_key   TEXT NOT NULL,  -- sport, task:3 и т. п.
+        item_title TEXT NOT NULL,  -- название на момент записи: история не зависит от задач
+        text       TEXT NOT NULL,
+        created_at TEXT NOT NULL,  -- ISO 8601
+        source     TEXT NOT NULL   -- desktop, cli, bot
+    );
+    CREATE INDEX notes_day ON notes (day);
+    """,
 ]
 
 

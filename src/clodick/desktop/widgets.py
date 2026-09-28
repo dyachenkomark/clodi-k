@@ -378,6 +378,15 @@ QToolButton#stop {{
     border-radius: 5px; font-size: 11px; padding: 1px 6px;
 }}
 QToolButton#stop:hover {{ color: {t.text}; border-color: {t.text}; }}
+QToolButton#note {{
+    color: {t.muted}; background: transparent; border: none; font-size: 13px; padding: 0 2px;
+}}
+QToolButton#note:hover {{ color: {t.accent}; }}
+QLabel#notetext {{ color: {t.muted}; font-size: 12px; }}
+QToolButton#notedel {{
+    color: {t.muted}; background: transparent; border: none; font-size: 14px; padding: 0;
+}}
+QToolButton#notedel:hover {{ color: {t.text}; }}
 """
 
 
@@ -389,6 +398,8 @@ class ChecklistPopup(QWidget):
 
     Внизу строка для своей задачи: Enter добавляет её, галочка daily — каждый день.
     У своих задач справа крестик, он удаляет задачу.
+    Кнопка ✎ открывает поле заметки к пункту: результат, комментарий. Enter сохраняет.
+    Сегодняшние заметки видны под пунктом, у каждой крестик.
     """
 
     toggled = Signal(str, bool)
@@ -397,6 +408,14 @@ class ChecklistPopup(QWidget):
     # Pomodoro: запустить фокус на пункте и остановить текущий.
     focus_requested = Signal(str)
     focus_stopped = Signal()
+    # Заметки: добавить к пункту, удалить по id. resized — окно поменяло размер.
+    note_added = Signal(str, str)
+    note_deleted = Signal(int)
+    resized = Signal()
+
+    # Отступ заметок слева: под текстом пункта, а не под галочкой.
+    NOTE_INDENT = 23
+    NOTE_WIDTH = 250
 
     def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -452,6 +471,11 @@ class ChecklistPopup(QWidget):
         self._rows: list[QWidget] = []
         self.remove_buttons: dict[str, QToolButton] = {}
         self.focus_buttons: dict[str, QToolButton] = {}
+        self.note_buttons: dict[str, QToolButton] = {}
+        self.note_editors: dict[str, QLineEdit] = {}
+        self.note_labels: dict[str, list[QLabel]] = {}
+        self.note_delete_buttons: dict[int, QToolButton] = {}
+        self._signature: list = []
         self.setMinimumWidth(240)
 
     @property
@@ -467,8 +491,9 @@ class ChecklistPopup(QWidget):
     def set_status(self, status: DayStatus, ram: int | None, focus_today: int = 0) -> None:
         self._title.setText(f"Today, {MONTHS[status.day.month - 1]} {status.day.day}")
         self._progress.setText(f"{status.done_count}/{status.total}")
-        keys = [item.category.key for item in status.items]
-        if list(self._boxes) != keys:
+        signature = [(i.category.key, tuple(n.id for n in i.notes)) for i in status.items]
+        if signature != self._signature:
+            self._signature = signature
             self._rebuild(status)
         for item in status.items:
             box = self._boxes[item.category.key]
@@ -498,6 +523,27 @@ class ChecklistPopup(QWidget):
         self.move(x, y)
         self.activateWindow()
 
+    def ask_note(self, key: str) -> None:
+        """Открыть поле заметки у пункта: например, сразу после галочки."""
+        editor = self.note_editors.get(key)
+        if editor is None:
+            return
+        editor.show()
+        self.adjustSize()
+        self.resized.emit()
+        editor.setFocus()
+
+    def _save_note(self, key: str) -> None:
+        editor = self.note_editors[key]
+        text = editor.text().strip()
+        editor.clear()
+        editor.hide()
+        if text:
+            self.note_added.emit(key, text)
+        else:
+            self.adjustSize()
+            self.resized.emit()
+
     def _submit(self) -> None:
         title = self.new_task.text().strip()
         if not title:
@@ -513,15 +559,29 @@ class ChecklistPopup(QWidget):
         self._boxes = {}
         self.remove_buttons = {}
         self.focus_buttons = {}
+        self.note_buttons = {}
+        self.note_editors = {}
+        self.note_labels = {}
+        self.note_delete_buttons = {}
         for item in status.items:
             key = item.category.key
             row = QWidget()
-            line = QHBoxLayout(row)
+            column = QVBoxLayout(row)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(1)
+            line = QHBoxLayout()
             line.setContentsMargins(0, 0, 0, 0)
+            column.addLayout(line)
             box = QCheckBox(item.category.title)
             box.setCursor(Qt.CursorShape.PointingHandCursor)
             box.toggled.connect(lambda checked, key=key: self.toggled.emit(key, checked))
             line.addWidget(box, 1)
+            note = QToolButton(objectName="note", text="✎")
+            note.setToolTip("Add a note or result")
+            note.setCursor(Qt.CursorShape.PointingHandCursor)
+            note.clicked.connect(lambda _=False, key=key: self.ask_note(key))
+            line.addWidget(note)
+            self.note_buttons[key] = note
             focus = QToolButton(objectName="focus", text="▶")
             focus.setToolTip("Start a focus session on this")
             focus.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -535,6 +595,33 @@ class ChecklistPopup(QWidget):
                 remove.clicked.connect(lambda _=False, key=key: self.task_removed.emit(key))
                 line.addWidget(remove)
                 self.remove_buttons[key] = remove
+            self._add_notes(column, key, item.notes)
             self._items.addWidget(row)
             self._rows.append(row)
             self._boxes[key] = box
+
+    def _add_notes(self, column: QVBoxLayout, key: str, notes) -> None:
+        """Заметки под пунктом и скрытое поле для новой."""
+        self.note_labels[key] = []
+        for note in notes:
+            line = QHBoxLayout()
+            line.setContentsMargins(self.NOTE_INDENT, 0, 0, 0)
+            label = QLabel(note.text, objectName="notetext", wordWrap=True)
+            label.setMaximumWidth(self.NOTE_WIDTH)
+            line.addWidget(label, 1)
+            delete = QToolButton(objectName="notedel", text="×")
+            delete.setToolTip("Delete note")
+            delete.setCursor(Qt.CursorShape.PointingHandCursor)
+            delete.clicked.connect(lambda _=False, nid=note.id: self.note_deleted.emit(nid))
+            line.addWidget(delete)
+            column.addLayout(line)
+            self.note_labels[key].append(label)
+            self.note_delete_buttons[note.id] = delete
+        editor = QLineEdit(placeholderText="Result or comment… (Enter)")
+        editor.returnPressed.connect(lambda key=key: self._save_note(key))
+        editor.hide()
+        holder = QHBoxLayout()
+        holder.setContentsMargins(self.NOTE_INDENT, 0, 0, 2)
+        holder.addWidget(editor)
+        column.addLayout(holder)
+        self.note_editors[key] = editor

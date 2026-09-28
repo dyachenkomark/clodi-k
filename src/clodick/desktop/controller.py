@@ -185,6 +185,9 @@ class DesktopApp(QObject):
         self.checklist.task_removed.connect(self._remove_task)
         self.checklist.focus_requested.connect(self.start_focus)
         self.checklist.focus_stopped.connect(self.stop_focus)
+        self.checklist.note_added.connect(self._add_note)
+        self.checklist.note_deleted.connect(self._delete_note)
+        self.checklist.resized.connect(self._reanchor_checklist)
 
         self.menu = self._build_menu()
         self.tray = self._build_tray()
@@ -406,6 +409,9 @@ class DesktopApp(QObject):
         log.info("%s %s через окно", "done" if checked else "undo", key)
         if checked and status.all_done:
             self.say(DONE_TEXT, seconds=6)
+        if checked:
+            # Сразу предложить записать результат. Не обязательно: можно просто закрыть.
+            self.checklist.ask_note(key)
 
     def _add_task(self, title: str, daily: bool) -> None:
         task = self._tracker.add_task(title, daily)
@@ -421,6 +427,26 @@ class DesktopApp(QObject):
         """Список изменился: перерисовать и заново прижать к еноту, размер мог поменяться."""
         self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
         self.checklist.open_near(self.pet.geometry(), self._screen_rect())
+
+    def _add_note(self, key: str, text: str) -> None:
+        try:
+            self._tracker.add_note(key, text, source="desktop")
+        except (KeyError, ValueError):
+            log.exception("заметка не сохранилась")
+            return
+        log.info("заметка к %s", key)
+        self._refresh_checklist()
+        if self._rng.random() < REACTION_LINE_CHANCE:
+            self.chat(self._rng.choice(("Noted!", "Written down.", "Nice result!")), 3)
+
+    def _delete_note(self, note_id: int) -> None:
+        if self._tracker.delete_note(note_id):
+            log.info("заметка удалена: %s", note_id)
+        self._refresh_checklist()
+
+    def _reanchor_checklist(self) -> None:
+        if self.checklist.isVisible():
+            self.checklist.open_near(self.pet.geometry(), self._screen_rect())
 
     def _react_to_done(self, key: str) -> None:
         """Отметили дело: спорт — мускулы, учёба — книжка, язык — песня, иначе что-то радостное."""

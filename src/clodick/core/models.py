@@ -41,10 +41,23 @@ class Task:
 
 
 @dataclass(frozen=True)
+class Note:
+    """Заметка к пункту чек-листа: результат, комментарий."""
+
+    id: int
+    day: date
+    key: str
+    title: str
+    text: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class CategoryStatus:
     category: Category
     done: bool
     done_at: datetime | None = None
+    notes: tuple[Note, ...] = ()
 
 
 @dataclass(frozen=True)

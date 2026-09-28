@@ -20,3 +20,20 @@ def test_cli_flow(capsys):
 def test_cli_unknown_category(capsys):
     assert main(["done", "chess"]) == 2
     assert "Unknown item" in capsys.readouterr().err
+
+
+def test_cli_notes_and_export(capsys, tmp_path):
+    assert main(["done", "sport"]) == 0
+    assert main(["note", "sport", "5", "km"]) == 0
+    out = capsys.readouterr().out
+    assert "- 5 km" in out
+
+    assert main(["notes"]) == 0
+    assert "Sport: 5 km" in capsys.readouterr().out
+
+    path = tmp_path / "history.csv"
+    assert main(["export", str(path)]) == 0
+    assert "Exported 1 days" in capsys.readouterr().out
+    assert "5 km" in path.read_text(encoding="utf-8-sig")
+
+    assert main(["note", "chess", "e4"]) == 2

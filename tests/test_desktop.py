@@ -573,3 +573,30 @@ def test_ram_on_belly_is_orange(playful_desktop):
     desktop, _ = playful_desktop
     assert desktop.pet.belly_text == "42%"
     assert desktop.pet._belly_color == QColor(RAM_COLOR)
+
+
+def test_checking_a_task_offers_a_note_and_saves_it(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.open_checklist()
+    desktop.checklist.boxes["sport"].setChecked(True)
+    editor = desktop.checklist.note_editors["sport"]
+    assert editor.isVisible()
+    editor.setText("5 km in 28 min")
+    editor.returnPressed.emit()
+
+    labels = desktop.checklist.note_labels["sport"]
+    assert [label.text() for label in labels] == ["5 km in 28 min"]
+    assert not desktop.checklist.note_editors["sport"].isVisible()
+    assert desktop._tracker.status().items[0].notes[0].text == "5 km in 28 min"
+
+    note_id = desktop._tracker.status().items[0].notes[0].id
+    desktop.checklist.note_delete_buttons[note_id].click()
+    assert desktop.checklist.note_labels["sport"] == []
+
+
+def test_note_button_opens_editor_without_checking(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.open_checklist()
+    desktop.checklist.note_buttons["study"].click()
+    assert desktop.checklist.note_editors["study"].isVisible()
+    assert not desktop._tracker.status().items[1].done
