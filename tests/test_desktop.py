@@ -563,3 +563,13 @@ def test_climb_from_menu_starts_right_away(playful_desktop):
     desktop.brain.place(*desktop.brain.home)
     desktop.climb_now()
     assert desktop.bubble.text == "The edge is too far, or walks are off."
+
+
+def test_ram_on_belly_is_orange(playful_desktop):
+    from PySide6.QtGui import QColor
+
+    from clodick.desktop.controller import RAM_COLOR
+
+    desktop, _ = playful_desktop
+    assert desktop.pet.belly_text == "42%"
+    assert desktop.pet._belly_color == QColor(RAM_COLOR)

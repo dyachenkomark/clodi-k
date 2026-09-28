@@ -91,6 +91,8 @@ DIAGONALS = {
 }
 # В каких позах пузо видно спереди и на нём пишется RAM.
 BELLY_MODES = (Mode.SIT, Mode.WAVE)
+# Цвет цифр RAM на пузе: оранжевый.
+RAM_COLOR = "#e8792b"
 
 
 class DesktopApp(QObject):
@@ -693,7 +695,7 @@ class DesktopApp(QObject):
             minutes = self.pomodoro.minutes_left(self._clock())
             self.pet.set_belly(str(minutes), rect, self.theme.accent if focus else color)
         elif self._belly_ram and self._ram is not None:
-            self.pet.set_belly(f"{self._ram}%", rect, color)
+            self.pet.set_belly(f"{self._ram}%", rect, RAM_COLOR)
         else:
             self.pet.set_belly(None)
 
