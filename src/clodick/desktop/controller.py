@@ -659,11 +659,32 @@ class DesktopApp(QObject):
             rect = QRect(point, size)
             if any(s.availableGeometry().intersects(rect) for s in QGuiApplication.screens()):
                 return point.x(), point.y()
-        area = QGuiApplication.primaryScreen().availableGeometry()
+        return self._corner(QGuiApplication.primaryScreen().availableGeometry())
+
+    def _corner(self, area: QRect) -> tuple[int, int]:
+        """Правый нижний угол рабочей области: место по умолчанию."""
+        size = self._pet_size()
         return (
             area.right() + 1 - size.width() - START_MARGIN,
             area.bottom() + 1 - size.height() - BOTTOM_PAD * self._scale,
         )
+
+    def summon(self) -> None:
+        """Позвать енота на экран, где сейчас курсор: в правый нижний угол.
+
+        Нужно, когда он ушёл на другой монитор или тот монитор выключен.
+        """
+        screen = QGuiApplication.screenAt(self._cursor()) or QGuiApplication.primaryScreen()
+        x, y = self._corner(screen.availableGeometry())
+        self._move_window(x, y)
+        self.brain.area = self._area()
+        self.brain.place(float(x), float(y))
+        self._save_position()
+        if not self.visible:
+            self.set_visible(True)
+        self._after_brain_change()
+        self.hop()
+        log.info("енота позвали на экран %s", screen.name())
 
     def _save_position(self) -> None:
         self._state.set("pet_pos", [round(v) for v in self.brain.home])
@@ -687,6 +708,7 @@ class DesktopApp(QObject):
     def _build_menu(self) -> QMenu:
         menu = QMenu()
         menu.addAction("Today's checklist", self.open_checklist)
+        menu.addAction("Bring raccoon here", self.summon)
         menu.addAction("Start focus", lambda: self.start_focus())
         self._stop_focus_action = menu.addAction("Stop focus", self.stop_focus)
         self._stop_focus_action.setEnabled(self.pomodoro.active)

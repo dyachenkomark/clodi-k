@@ -445,3 +445,18 @@ def test_checklist_opens_above_raccoon_without_covering_it(playful_desktop):
     desktop.start_focus("sport")
     desktop.open_checklist()
     assert desktop.checklist.geometry().bottom() < desktop.pet.geometry().top()
+
+
+def test_summon_brings_raccoon_to_cursor_screen(playful_desktop):
+    from PySide6.QtGui import QGuiApplication
+
+    desktop, cursor = playful_desktop
+    desktop.pet.move(-5000, -5000)
+    desktop.pet.drag_moved.emit()
+    desktop.set_visible(False)
+    screen = QGuiApplication.primaryScreen().availableGeometry()
+    cursor.pos = screen.center()
+    desktop.summon()
+    assert desktop.pet.isVisible()
+    assert screen.contains(desktop.pet.geometry())
+    assert screen.contains(QPoint(*desktop._state.get("pet_pos")))
