@@ -54,7 +54,7 @@ ACTIONS: dict[str, Action] = {
     "zoomies": Action(0.5, (0.0, 0.0), lively=True, lines=("Zoom zoom!",), kind="zoomies"),
     # Лазает по правому краю экрана, как по дереву. Нужны кадры climb.
     "climb": Action(
-        0.8,
+        3,
         (0.0, 0.0),
         lively=True,
         lines=("Tree time!", "I can see my house from here."),

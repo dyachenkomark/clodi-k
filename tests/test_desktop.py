@@ -553,3 +553,13 @@ def test_raccoon_climbs_right_edge_and_comes_back(playful_desktop):
     assert {(Mode.CLIMB, "up"), (Mode.CLIMB, "hang"), (Mode.CLIMB, "down")} <= seen
     assert brain.at_home
     assert brain.home == home
+
+
+def test_climb_from_menu_starts_right_away(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.climb_now()
+    assert desktop.brain.climb_phase in ("to_edge", "up")
+    desktop.set_walks(False)
+    desktop.brain.place(*desktop.brain.home)
+    desktop.climb_now()
+    assert desktop.bubble.text == "The edge is too far, or walks are off."

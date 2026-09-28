@@ -484,6 +484,8 @@ class DesktopApp(QObject):
     def _after_tick(self, now: float) -> None:
         """Реплика к только что начатому действию и болтовня по расписанию."""
         started = self.brain.pop_started()
+        if started:
+            log.info("занятие: %s", started)
         if started and ACTIONS[started].lines and self._rng.random() < ACTION_LINE_CHANCE:
             self.chat(self._rng.choice(ACTIONS[started].lines), 4)
         if now >= self._next_chat:
@@ -750,6 +752,15 @@ class DesktopApp(QObject):
             area.bottom() + 1 - size.height() - BOTTOM_PAD * self._scale,
         )
 
+    def climb_now(self) -> None:
+        """Из меню: пусть сейчас же лезет по правому краю экрана."""
+        self.brain.area = self._area()
+        if self.brain.climb():
+            log.info("занятие: climb (из меню)")
+            self._after_brain_change()
+        elif self.brain.mode is not Mode.CLIMB:
+            self.say("The edge is too far, or walks are off.", 5, wave=False)
+
     def summon(self) -> None:
         """Позвать енота на экран, где сейчас курсор: в правый нижний угол.
 
@@ -790,6 +801,7 @@ class DesktopApp(QObject):
         menu = QMenu()
         menu.addAction("Today's checklist", self.open_checklist)
         menu.addAction("Bring raccoon here", self.summon)
+        menu.addAction("Climb the edge", self.climb_now)
         menu.addAction("Start focus", lambda: self.start_focus())
         self._stop_focus_action = menu.addAction("Stop focus", self.stop_focus)
         self._stop_focus_action.setEnabled(self.pomodoro.active)
