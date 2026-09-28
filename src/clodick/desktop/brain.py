@@ -1,4 +1,4 @@
-"""Поведение персонажа: сидит, спит, машет, гуляет, возится. Без Qt, чтобы легко тестировать.
+"""Поведение персонажа: сидит, спит, машет, гуляет, чем-то занят. Без Qt, чтобы легко тестировать.
 
 Экран для персонажа — пол, на который смотрят сверху под углом. Координаты x, y — левый
 верхний угол кадра персонажа на экране, в логических пикселях.
@@ -11,25 +11,25 @@ import random
 from dataclasses import dataclass
 from enum import Enum
 
+from clodick.desktop.actions import Action
+
 
 class Mode(Enum):
     SIT = "sit"
     SLEEP = "sleep"
     WAVE = "wave"
     WALK = "walk"
-    # Необязательные позы: есть не у каждого персонажа.
-    WASH = "wash"
-    STRETCH = "stretch"
-    EAT = "eat"
+    # Занят действием из actions.py: какое — в Brain.action.
+    ACT = "act"
 
-
-# Чем персонаж может заняться сам, пока сидит.
-FIDGETS = (Mode.WASH, Mode.STRETCH)
 
 # Куда смотрит на ходу: восемь направлений через 45°. Экран: y растёт вниз.
 RIGHT, LEFT, UP, DOWN = "right", "left", "up", "down"
 DOWN_RIGHT, DOWN_LEFT, UP_RIGHT, UP_LEFT = "down_right", "down_left", "up_right", "up_left"
 DIRECTIONS = (RIGHT, DOWN_RIGHT, DOWN, DOWN_LEFT, LEFT, UP_LEFT, UP, UP_RIGHT)
+
+# Настроение: обычное, спокойное (фокус, ночь) и игривое (перерыв).
+NORMAL, CALM, LIVELY = "normal", "calm", "lively"
 
 
 @dataclass(frozen=True)
@@ -46,19 +46,23 @@ class Area:
 
 
 # Сколько секунд длится каждое занятие: (минимум, максимум).
-SIT_AT_HOME = (15.0, 45.0)
+SIT_AT_HOME = (10.0, 30.0)
 SIT_OUTSIDE = (4.0, 10.0)
-SLEEP = (45.0, 120.0)
-WALK_CHANCE = 0.4
-SLEEP_CHANCE = 0.15
+SLEEP = (30.0, 90.0)
+WALK_CHANCE = 0.3
+SLEEP_CHANCE = 0.1
+# Шанс заняться чем-нибудь из actions.py.
+ACTION_CHANCE = 0.5
 # Ночью персонаж сонный: чаще спит, реже гуляет.
 NIGHT_WALK_CHANCE = 0.1
-NIGHT_SLEEP_CHANCE = 0.6
-# Во сколько раз быстрее обычного шага он отбегает от курсора.
+NIGHT_SLEEP_CHANCE = 0.5
+# Во сколько раз быстрее обычного шага он отбегает от курсора и носится.
 RUSH = 4.0
-# Шанс повозиться (потереть лапки, потянуться) и сколько это длится.
-FIDGET_CHANCE = 0.3
-FIDGET = (2.5, 4.0)
+# Кружится за хвостом: поворот каждые SPIN_STEP секунд.
+SPIN_STEP = 0.12
+# Носится зигзагом: сколько точек и как далеко от места.
+ZOOMIES_POINTS = 4
+ZOOMIES_RADIUS = 160.0
 
 
 class Brain:
@@ -71,7 +75,7 @@ class Brain:
         walks: bool = True,
         roam: float = 500.0,
         rng: random.Random | None = None,
-        fidgets: tuple[Mode, ...] = (),
+        actions: dict[str, Action] | None = None,
     ) -> None:
         self.home = home
         self.area = area
@@ -80,16 +84,23 @@ class Brain:
         # Как далеко от своего места он уходит гулять, в логических пикселях.
         self.roam = roam
         self.rng = rng or random.Random()
-        self.fidgets = fidgets
+        # Какие действия доступны этому персонажу.
+        self.actions = actions or {}
+        self.mood = NORMAL
         self.x, self.y = home
         self.mode = Mode.SIT
+        self.action: str | None = None
         self.facing = DOWN
         # Последнее направление по горизонтали: 1 — вправо, -1 — влево.
         self.side = 1
         self._outside = False
         self._target: tuple[float, float] | None = None
+        self._route: list[tuple[float, float]] = []
         self._rush = False
+        self._spin = 0.0
         self.sleepy = False
+        # Какое действие он начал сам с прошлого pop_started(): чтобы сказать реплику.
+        self._started: str | None = None
         self._timer = self._pick(SIT_AT_HOME)
 
     @property
@@ -98,8 +109,12 @@ class Brain:
 
     @property
     def is_active(self) -> bool:
-        """Нужны ли частые обновления: персонаж двигается или машет."""
-        return self.mode in (Mode.WALK, Mode.WAVE)
+        """Нужны ли частые обновления: персонаж двигается, машет или кружится."""
+        return self.mode in (Mode.WALK, Mode.WAVE) or self.action == "spin"
+
+    def pop_started(self) -> str | None:
+        started, self._started = self._started, None
+        return started
 
     def place(self, x: float, y: float) -> None:
         """Персонажа перетащили мышью: где отпустили, там теперь его место."""
@@ -107,6 +122,7 @@ class Brain:
         self.x, self.y = x, y
         self._outside = False
         self._target = None
+        self._route = []
         self._sit()
 
     def set_area(self, area: Area) -> None:
@@ -118,16 +134,18 @@ class Brain:
         else:
             self.x, self.y = area.clamp(self.x, self.y)
             if self.mode is Mode.WALK:
+                self._route = []
                 self._walk_to(*self.home)
 
     def set_walks(self, walks: bool) -> None:
         self.walks = walks
         if not walks and self._outside and self.mode is not Mode.WAVE:
+            self._route = []
             self._walk_to(*self.home)
 
     def wave(self, seconds: float = 5.0) -> None:
         """Привлечь внимание: остановиться и помахать."""
-        self.mode = Mode.WAVE
+        self._set_mode(Mode.WAVE)
         self._timer = seconds
 
     def dodge(self, x: float, y: float) -> bool:
@@ -139,15 +157,31 @@ class Brain:
         if (x, y) == (self.x, self.y):
             return False
         self._outside = True
+        self._route = []
         self._walk_to(x, y)
         self._rush = True
         return True
 
-    def act(self, mode: Mode, seconds: float) -> None:
-        """Заняться чем-то на месте: поесть, потянуться. Прогулку не прерывает."""
+    def approach(self, x: float, y: float, stop: float) -> bool:
+        """Подойти посмотреть на точку, остановившись в stop пикселях от неё."""
+        if self.mode not in (Mode.SIT, Mode.ACT) or not self.walks:
+            return False
+        distance = math.dist((self.x, self.y), (x, y))
+        if distance <= stop + self.speed:
+            return False
+        k = (distance - stop) / distance
+        tx, ty = self.area.clamp(self.x + (x - self.x) * k, self.y + (y - self.y) * k)
+        if math.dist((tx, ty), self.home) > self.roam:
+            return False
+        self._outside = True
+        self._walk_to(tx, ty)
+        return True
+
+    def act(self, name: str, seconds: float) -> None:
+        """Заняться действием на месте: поесть, похлопать. Прогулку не прерывает."""
         if self.mode is Mode.WALK:
             return
-        self.mode = mode
+        self._set_mode(Mode.ACT, name)
         self._timer = seconds
 
     def wake(self) -> None:
@@ -158,15 +192,23 @@ class Brain:
         if self.mode is Mode.WALK:
             self._step(dt)
             return
+        if self.action == "spin":
+            self._spin += dt
+            while self._spin >= SPIN_STEP:
+                self._spin -= SPIN_STEP
+                i = DIRECTIONS.index(self.facing)
+                self.facing = DIRECTIONS[(i + 1) % len(DIRECTIONS)]
         self._timer -= dt
         if self._timer > 0:
             return
-        if self._outside and self.mode in (Mode.SIT, Mode.WAVE):
+        if self._outside and self.mode in (Mode.SIT, Mode.WAVE, Mode.ACT):
             self._walk_to(*self.home)
         elif self.mode is Mode.SIT:
             self._decide()
         else:
             self._sit()
+
+    # --- решения ---
 
     def _decide(self) -> None:
         roll = self.rng.random()
@@ -180,14 +222,58 @@ class Brain:
                 self._walk_to(*target)
                 return
         if roll < walk + sleep:
-            self.mode = Mode.SLEEP
+            self._set_mode(Mode.SLEEP)
             self._timer = self._pick(SLEEP)
             return
-        if self.fidgets and roll < walk + sleep + FIDGET_CHANCE:
-            self.mode = self.rng.choice(self.fidgets)
-            self._timer = self._pick(FIDGET)
-            return
+        if roll < walk + sleep + ACTION_CHANCE:
+            name = self._pick_action()
+            if name is not None:
+                self._start(name)
+                return
         self._sit()
+
+    def _pick_action(self) -> str | None:
+        """Случайное действие с учётом настроения: спокойное, обычное или игривое."""
+        mood = CALM if self.sleepy else self.mood
+        weights = {}
+        for name, action in self.actions.items():
+            weight = action.weight
+            if mood == CALM and not action.calm:
+                weight = 0
+            elif mood == LIVELY and action.lively:
+                weight *= 3
+            if action.kind == "zoomies" and not self.walks:
+                weight = 0
+            if weight > 0:
+                weights[name] = weight
+        if not weights:
+            return None
+        roll = self.rng.random() * sum(weights.values())
+        for name, weight in weights.items():
+            roll -= weight
+            if roll < 0:
+                return name
+        return name
+
+    def _start(self, name: str) -> None:
+        action = self.actions[name]
+        self._started = name
+        if action.kind == "zoomies":
+            self._route = [self._zoomies_point() for _ in range(ZOOMIES_POINTS)]
+            self._outside = True
+            x, y = self._route.pop(0)
+            self._walk_to(x, y)
+            self._rush = True
+            return
+        self._set_mode(Mode.ACT, name)
+        self._spin = 0.0
+        self._timer = self._pick(action.seconds)
+
+    def _zoomies_point(self) -> tuple[float, float]:
+        hx, hy = self.home
+        angle = self.rng.uniform(0, 2 * math.pi)
+        distance = self.rng.uniform(ZOOMIES_RADIUS / 3, ZOOMIES_RADIUS)
+        return self.area.clamp(hx + distance * math.cos(angle), hy + distance * math.sin(angle))
 
     def _pick_walk_target(self) -> tuple[float, float] | None:
         """Случайная точка в пределах roam от дома, не ближе трёх секунд ходьбы."""
@@ -203,8 +289,10 @@ class Brain:
                 return x, y
         return None
 
+    # --- движение ---
+
     def _walk_to(self, x: float, y: float) -> None:
-        self.mode = Mode.WALK
+        self._set_mode(Mode.WALK)
         self._target = (x, y)
         self._rush = False
         dx, dy = x - self.x, y - self.y
@@ -229,18 +317,29 @@ class Brain:
 
     def _arrive(self) -> None:
         self._target = None
+        if self._route:
+            x, y = self._route.pop(0)
+            self._walk_to(x, y)
+            self._rush = True
+            return
         self._rush = False
         if (self.x, self.y) == self.home:
             self._outside = False
             self.facing = DOWN
             self._sit()
         else:
-            self.mode = Mode.SIT
+            self._set_mode(Mode.SIT)
             self._timer = self._pick(SIT_OUTSIDE)
 
     def _sit(self) -> None:
-        self.mode = Mode.SIT
+        self._set_mode(Mode.SIT)
         self._timer = self._pick(SIT_OUTSIDE if self._outside else SIT_AT_HOME)
+
+    def _set_mode(self, mode: Mode, action: str | None = None) -> None:
+        if self.action == "spin" and action != "spin":
+            self.facing = DOWN
+        self.mode = mode
+        self.action = action
 
     def _pick(self, span: tuple[float, float]) -> float:
         return self.rng.uniform(*span)

@@ -3,7 +3,9 @@ import random
 
 import pytest
 
+from clodick.desktop.actions import ACTIONS
 from clodick.desktop.brain import (
+    CALM,
     DOWN,
     DOWN_RIGHT,
     LEFT,
@@ -120,7 +122,7 @@ def test_no_walks_when_disabled():
 
 
 def test_falls_asleep_and_wakes():
-    brain = make_brain(rolls=[0.5])
+    brain = make_brain(rolls=[0.35])
     run_until(brain, lambda b: b.mode is Mode.SLEEP, SIT_AT_HOME[1] + 1)
     brain.wake()
     assert brain.mode is Mode.SIT
@@ -203,31 +205,75 @@ def test_dodge_is_clamped_to_screen():
 
 
 def test_sleepy_brain_sleeps_more():
-    awake = make_brain(rolls=[0.6])
+    awake = make_brain(rolls=[0.55])
     awake._decide()
     assert awake.mode is Mode.SIT
 
-    sleepy = make_brain(rolls=[0.6])
+    sleepy = make_brain(rolls=[0.55])
     sleepy.sleepy = True
     sleepy._decide()
     assert sleepy.mode is Mode.SLEEP
 
 
-def test_fidgets_only_when_available():
+def test_actions_only_when_available():
     plain = make_brain(rolls=[0.7])
     plain._decide()
     assert plain.mode is Mode.SIT
 
-    busy = make_brain(rolls=[0.7])
-    busy.fidgets = (Mode.WASH,)
+    busy = make_brain(rolls=[0.7, 0.0])
+    busy.actions = {"wash": ACTIONS["wash"]}
     busy._decide()
-    assert busy.mode is Mode.WASH
+    assert (busy.mode, busy.action) == (Mode.ACT, "wash")
+    assert busy.pop_started() == "wash"
+    assert busy.pop_started() is None
     run(busy, 5)
     assert busy.mode is Mode.SIT
+    assert busy.action is None
+
+
+def test_calm_mood_picks_only_calm_actions():
+    for seed in range(20):
+        brain = Brain((500.0, 400.0), AREA, speed=40.0, rng=random.Random(seed))
+        brain.actions = {"dance": ACTIONS["dance"], "read": ACTIONS["read"]}
+        brain.mood = CALM
+        assert brain._pick_action() == "read"
+
+
+def test_spin_chases_tail_then_faces_viewer():
+    brain = make_brain()
+    brain.act("spin", 1.0)
+    seen = set()
+    for _ in range(8):
+        brain.tick(0.12)
+        seen.add(brain.facing)
+    assert len(seen) >= 6
+    run(brain, 2)
+    assert brain.mode is Mode.SIT
+    assert brain.facing == DOWN
+
+
+def test_zoomies_run_a_route_and_come_home():
+    brain = make_brain(rolls=[0.7, 0.0])
+    brain.actions = {"zoomies": ACTIONS["zoomies"]}
+    brain._decide()
+    assert brain.mode is Mode.WALK
+    assert brain._rush
+    assert len(brain._route) == 3
+    run(brain, 60)
+    assert brain.at_home
+
+
+def test_approach_stops_short_of_point():
+    brain = make_brain()
+    assert brain.approach(800.0, 400.0, stop=60.0)
+    run_until(brain, lambda b: b.mode is Mode.SIT)
+    assert brain.x == 740.0
+    assert not brain.at_home
+    assert not make_brain(walks=False).approach(800.0, 400.0, stop=60.0)
 
 
 def test_act_does_not_interrupt_walk():
     brain = make_brain()
     brain._walk_to(100.0, 100.0)
-    brain.act(Mode.EAT, 3.0)
+    brain.act("eat", 3.0)
     assert brain.mode is Mode.WALK

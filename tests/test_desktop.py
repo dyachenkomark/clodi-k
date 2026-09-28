@@ -328,17 +328,66 @@ def test_checking_a_task_makes_raccoon_hop(playful_desktop):
     assert desktop.pet._lift == 0
 
 
-def test_raccoon_has_extra_poses(playful_desktop):
+def test_raccoon_has_many_actions(playful_desktop):
     desktop, _ = playful_desktop
-    assert set(desktop.brain.fidgets) == {Mode.WASH, Mode.STRETCH}
+    actions = set(desktop.brain.actions)
+    assert len(actions) >= 20
+    assert {"wash", "dance", "trash", "read", "spin", "zoomies"} <= actions
+    assert "eat" not in actions  # только в награду
 
 
-def test_checking_a_task_gives_a_cookie(playful_desktop):
+@pytest.mark.parametrize(
+    ("key", "action"), [("sport", "flex"), ("study", "read"), ("language", "sing")]
+)
+def test_checking_a_task_gets_its_own_reaction(playful_desktop, key, action):
     desktop, _ = playful_desktop
     desktop.open_checklist()
-    desktop.checklist.boxes["study"].setChecked(True)
-    assert desktop.brain.mode is Mode.EAT
+    desktop.checklist.boxes[key].setChecked(True)
+    assert (desktop.brain.mode, desktop.brain.action) == (Mode.ACT, action)
+    assert desktop._shown_anim == (action, 1)
     assert desktop.pet.belly_text is None
+
+
+def test_own_task_gets_a_happy_reaction(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop._tracker.add_task("Buy milk")
+    desktop.open_checklist()
+    key = next(k for k in desktop.checklist.boxes if k.startswith("task:"))
+    desktop.checklist.boxes[key].setChecked(True)
+    assert desktop.brain.action in ("clap", "dance", "eat")
+
+
+def test_raccoon_chats_but_not_during_focus(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop._next_chat = 0
+    desktop._after_tick(1.0)
+    assert desktop.bubble.isVisible()
+    assert desktop.brain.mode is not Mode.WAVE  # болтовня не отвлекает от занятия
+    desktop.bubble.hide()
+
+    desktop.start_focus()
+    desktop.bubble.hide()
+    desktop._next_chat = 0
+    desktop._after_tick(2.0)
+    assert not desktop.bubble.isVisible()
+
+
+def test_chatty_can_be_turned_off(playful_desktop):
+    desktop, _ = playful_desktop
+    desktop.set_chatty(False)
+    desktop._next_chat = 0
+    desktop._after_tick(1.0)
+    assert not desktop.bubble.isVisible()
+
+
+def test_curious_raccoon_comes_to_resting_cursor(playful_desktop):
+    desktop, cursor = playful_desktop
+    rect = desktop.pet.geometry()
+    cursor.pos = rect.center() + QPoint(-250, 0)
+    for step in range(80):
+        desktop._watch_cursor(now=100.0 + step * 0.1)
+    assert desktop.brain.mode is Mode.WALK
+    assert desktop.brain.facing == "left"
 
 
 def test_raccoon_looks_at_nearby_cursor(playful_desktop):

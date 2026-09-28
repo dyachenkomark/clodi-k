@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from clodick import paths
 from clodick.characters import DEFAULT_CHARACTER, Character, builtin_dir, discover
 from clodick.config import Config
+from clodick.core.chatter import idle_line
 from clodick.core.pomodoro import Event, Phase, Pomodoro
 from clodick.core.reminders import (
     DONE_TEXT,
@@ -24,12 +25,15 @@ from clodick.core.reminders import (
     reminder_text,
 )
 from clodick.core.tracker import Tracker
+from clodick.desktop.actions import ACTIONS, TASK_LINES, TASK_REACTION_POOL, TASK_REACTIONS
 from clodick.desktop.art import GROUND_ROW, YARD_X
 from clodick.desktop.brain import (
+    CALM,
     DOWN,
     DOWN_LEFT,
     DOWN_RIGHT,
-    FIDGETS,
+    LIVELY,
+    NORMAL,
     UP,
     UP_LEFT,
     UP_RIGHT,
@@ -45,14 +49,8 @@ from clodick.storage.state import StateStore
 log = logging.getLogger(__name__)
 
 # Сколько длится кадр анимации, секунды. Для сидения первый кадр длится случайно 2.5–6 с.
-FRAME_SECONDS = {
-    "sleep": 0.9,
-    "wave": 0.3,
-    "walk": 0.18,
-    "wash": 0.22,
-    "stretch": 0.8,
-    "eat": 0.35,
-}
+# Кадры действий — в actions.py.
+FRAME_SECONDS = {"sleep": 0.9, "wave": 0.3, "walk": 0.18}
 BLINK_SECONDS = 0.15
 ACTIVE_TICK_MS = 80
 IDLE_TICK_MS = 1000
@@ -79,8 +77,14 @@ HOP_FRAME_MS = 40
 NIGHT_FROM, NIGHT_TO = 23, 6
 # Курсор ближе этого к центру енота — он на него косится.
 LOOK_RADIUS = 220
-# Сколько секунд енот грызёт печеньку за отмеченную задачу.
-EAT_SECONDS = 3.0
+# Болтовня: реплика раз в столько минут, и шанс сказать что-то, начиная действие.
+CHAT_MINUTES = (10.0, 25.0)
+ACTION_LINE_CHANCE = 0.35
+REACTION_LINE_CHANCE = 0.3
+# Курсор долго стоит рядом — енот подходит посмотреть.
+CURIOUS_RADIUS = 320
+CURIOUS_SECONDS = 6.0
+CURIOUS_COOLDOWN = 90.0
 # Какие кадры показывать на ходу по диагонали: (анимация, отражать ли).
 DIAGONALS = {
     DOWN_RIGHT: ("walk_down_right", 1),
@@ -125,6 +129,7 @@ class DesktopApp(QObject):
         self._read_ram = ram_reader
         self._clock = clock
         self._cursor = cursor
+        self._rng = rng or random.Random()
         self._scale = config.desktop.scale
         self._ram: int | None = None
 
@@ -145,8 +150,8 @@ class DesktopApp(QObject):
             speed=10.0 * self._scale,
             walks=bool(state.get("walks", config.desktop.walks)),
             roam=float(config.desktop.roam),
-            rng=rng,
-            fidgets=self._fidgets(),
+            rng=self._rng,
+            actions=self._available_actions(),
         )
         self._reminders_on = bool(state.get("reminders_on", True))
         self.pomodoro = Pomodoro.from_dict(config.pomodoro, state.get("pomodoro"))
@@ -161,6 +166,10 @@ class DesktopApp(QObject):
         self._dodge_ready = 0.0
         self._pet_ready = 0.0
         self._hop: list[int] = []
+        self._chatty = bool(state.get("chatty", True))
+        self._next_chat = time.monotonic() + self._chat_delay()
+        self._still_since: float | None = None
+        self._curious_ready = 0.0
         # Куда косится: 0 — влево, 1 — вправо, None — прямо.
         self._look: int | None = None
         self._reminder_clock = ReminderClock(parse_times(config.reminders), clock())
@@ -339,7 +348,7 @@ class DesktopApp(QObject):
         dy = (self.character.height - character.height) * self._scale
         self.character = character
         self._book = self._make_book(character)
-        self.brain.fidgets = self._fidgets()
+        self.brain.actions = self._available_actions()
         hx, hy = self.brain.home
         self.brain.place(hx, hy + dy)
         self.brain.set_area(self._area())
@@ -364,15 +373,30 @@ class DesktopApp(QObject):
             theme=self.theme.key,
         )
 
-    def say(self, text: str, seconds: float = 12.0) -> None:
+    def say(self, text: str, seconds: float = 12.0, *, wave: bool = True) -> None:
+        """Пузырь с репликой. wave=False — сказать между делом, не отвлекаясь от занятия.
+
+        Если персонаж спрятан, важное (wave=True) приходит уведомлением трея, болтовня молчит.
+        """
         if not self.visible:
-            if self.tray is not None:
+            if wave and self.tray is not None:
                 self.tray.showMessage("cloDICK", text, self._tray_icon(), int(seconds * 1000))
             return
-        self.brain.wave(min(seconds, 6.0))
-        self._after_brain_change()
+        if wave:
+            self.brain.wave(min(seconds, 6.0))
+            self._after_brain_change()
         self.bubble.say(text, seconds)
         self._place_bubble()
+
+    def chat(self, text: str, seconds: float = 5.0) -> None:
+        """Болтовня: только если она включена и сейчас не фокус."""
+        if self._chatty and self.pomodoro.phase is not Phase.FOCUS and not self.bubble.isVisible():
+            self.say(text, seconds, wave=False)
+
+    def set_chatty(self, on: bool) -> None:
+        self._state.set("chatty", on)
+        self._chatty = on
+        self._chatty_action.setChecked(on)
 
     def open_checklist(self) -> None:
         self.bubble.hide()
@@ -387,9 +411,7 @@ class DesktopApp(QObject):
         if checked:
             self._tracker.mark_done(key, source="desktop")
             self.hop()
-            if "eat" in self.character.animations:
-                self.brain.act(Mode.EAT, EAT_SECONDS)
-                self._after_brain_change()
+            self._react_to_done(key)
         else:
             self._tracker.unmark(key)
         status = self._tracker.status()
@@ -412,6 +434,19 @@ class DesktopApp(QObject):
         """Список изменился: перерисовать и заново прижать к еноту, размер мог поменяться."""
         self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
         self.checklist.open_near(self.pet.geometry(), self._screen_rect())
+
+    def _react_to_done(self, key: str) -> None:
+        """Отметили дело: спорт — мускулы, учёба — книжка, язык — песня, иначе что-то радостное."""
+        name = TASK_REACTIONS.get(key) or self._rng.choice(TASK_REACTION_POOL)
+        if name not in self.character.animations:
+            name = "eat" if "eat" in self.character.animations else None
+        if name is None:
+            return
+        self.brain.act(name, max(ACTIONS[name].seconds))
+        self._after_brain_change()
+        lines = TASK_LINES.get(name)
+        if lines and self._rng.random() < REACTION_LINE_CHANCE * 2:
+            self.chat(self._rng.choice(lines), 4)
 
     def _greet(self) -> None:
         if not self._reminders_on or self.pomodoro.phase is Phase.FOCUS:
@@ -445,8 +480,27 @@ class DesktopApp(QObject):
         self.brain.sleepy = hour >= NIGHT_FROM or hour < NIGHT_TO
         if self.pomodoro.active:
             self._check_pomodoro()
+        phase = self.pomodoro.phase
+        moods = {Phase.FOCUS: CALM, Phase.BREAK: LIVELY}
+        self.brain.mood = moods.get(phase, NORMAL)
         self.brain.tick(min(dt, 2.0))
         self._after_brain_change()
+        self._after_tick(now)
+
+    def _after_tick(self, now: float) -> None:
+        """Реплика к только что начатому действию и болтовня по расписанию."""
+        started = self.brain.pop_started()
+        if started and ACTIONS[started].lines and self._rng.random() < ACTION_LINE_CHANCE:
+            self.chat(self._rng.choice(ACTIONS[started].lines), 4)
+        if now >= self._next_chat:
+            self._next_chat = now + self._chat_delay()
+            if self.brain.mode is not Mode.SLEEP:
+                status = self._tracker.status()
+                line = idle_line(self._clock(), status, self._tracker.focus_count(), self._rng)
+                self.chat(line, 7)
+
+    def _chat_delay(self) -> float:
+        return self._rng.uniform(*CHAT_MINUTES) * 60
 
     def _after_brain_change(self) -> None:
         self._place_pet()
@@ -466,16 +520,28 @@ class DesktopApp(QObject):
         """
         mode = self.brain.mode
         animations = self.character.animations
+        if mode is Mode.ACT:
+            action = self.brain.action
+            if action == "spin":
+                return self._walk_animation()
+            return (action, 1) if action in animations else ("sit", 1)
         if mode is Mode.WALK:
-            facing = self.brain.facing
-            if facing in (UP, DOWN) and f"walk_{facing}" in animations:
-                return f"walk_{facing}", 1
-            if facing in DIAGONALS and DIAGONALS[facing][0] in animations:
-                return DIAGONALS[facing]
-            return "walk", self.brain.side
+            return self._walk_animation()
         if mode is Mode.SIT and self._look is not None and "look" in animations:
             return "look", 1
         return mode.value, 1
+
+    def _walk_animation(self) -> tuple[str, int]:
+        """Кадры ходьбы для текущего направления. Кружась за хвостом, он тоже их показывает."""
+        animations = self.character.animations
+        facing = self.brain.facing
+        if facing in (UP, DOWN) and f"walk_{facing}" in animations:
+            return f"walk_{facing}", 1
+        if facing in DIAGONALS and DIAGONALS[facing][0] in animations:
+            return DIAGONALS[facing]
+        if facing in (UP, DOWN):
+            return "walk", self.brain.side
+        return "walk", 1 if "right" in facing else -1
 
     def _apply_frame(self, *, restart: bool) -> None:
         if restart:
@@ -501,8 +567,10 @@ class DesktopApp(QObject):
         mode = self.brain.mode.value
         if mode == "sit":
             seconds = BLINK_SECONDS if self._frame_index else random.uniform(2.5, 6.0)
+        elif mode == "act" and self.brain.action != "spin":
+            seconds = ACTIONS[self.brain.action].frame
         else:
-            seconds = FRAME_SECONDS[mode]
+            seconds = FRAME_SECONDS["walk" if mode == "act" else mode]
         self._anim_timer.start(int(seconds * 1000))
 
     def _place_pet(self) -> None:
@@ -571,13 +639,18 @@ class DesktopApp(QObject):
             self._dodge_ready = now + DODGE_COOLDOWN
             self._pet_since = None
             self._after_brain_change()
+            if self._rng.random() < REACTION_LINE_CHANCE:
+                self.chat(self._rng.choice(("Whoa!", "Hey, careful!", "Eek!")), 2.5)
             return
+        self._watch_still(pos, speed, now)
         if rect.contains(pos) and speed < PET_SPEED and mode is Mode.SIT:
             if self._pet_since is None:
                 self._pet_since = now
             elif now - self._pet_since >= PET_SECONDS and now >= self._pet_ready:
                 self.pet.show_heart(HEART_SECONDS)
                 self._pet_ready = now + PET_COOLDOWN
+                if self._rng.random() < REACTION_LINE_CHANCE * 2:
+                    self.chat(self._rng.choice(("Purr~", "More, please.", "Hehe.")), 3)
         else:
             self._pet_since = None
 
@@ -592,8 +665,37 @@ class DesktopApp(QObject):
             if self.brain.mode is Mode.SIT:
                 self._apply_frame(restart=False)
 
-    def _fidgets(self) -> tuple[Mode, ...]:
-        return tuple(m for m in FIDGETS if m.value in self.character.animations)
+    def _watch_still(self, pos: QPoint, speed: float, now: float) -> None:
+        """Курсор долго стоит неподалёку — енот подходит посмотреть, что там."""
+        rect = self.pet.geometry()
+        near = (pos - rect.center()).manhattanLength() < CURIOUS_RADIUS
+        if speed >= PET_SPEED or not near or rect.contains(pos):
+            self._still_since = None
+            return
+        if self._still_since is None:
+            self._still_since = now
+            return
+        if (
+            now - self._still_since >= CURIOUS_SECONDS
+            and now >= self._curious_ready
+            and self.pomodoro.phase is not Phase.FOCUS
+        ):
+            self._curious_ready = now + CURIOUS_COOLDOWN
+            self._still_since = None
+            size = self._pet_size()
+            x = pos.x() - size.width() / 2
+            y = pos.y() - size.height() / 2 - self.pet.sprite_offset
+            if self.brain.approach(x, y, stop=size.width() * 1.3):
+                self._after_brain_change()
+
+    def _available_actions(self) -> dict:
+        """Действия, для которых у персонажа есть кадры, и поведение без своих кадров."""
+        animations = self.character.animations
+        return {
+            name: action
+            for name, action in ACTIONS.items()
+            if action.weight > 0 and (action.kind != "anim" or name in animations)
+        }
 
     def _update_belly(self) -> None:
         """Загрузка RAM на пузе. Когда пузо сбоку или закрыто лапами, надписи нет."""
@@ -734,6 +836,9 @@ class DesktopApp(QObject):
         self._playful_action = QAction("Playful", menu, checkable=True)
         self._playful_action.setChecked(self._playful)
         self._playful_action.toggled.connect(self.set_playful)
+        self._chatty_action = QAction("Chatty", menu, checkable=True)
+        self._chatty_action.setChecked(self._chatty)
+        self._chatty_action.toggled.connect(self.set_chatty)
         self._belly_action = QAction("RAM on belly", menu, checkable=True)
         self._belly_action.setChecked(self._belly_ram)
         self._belly_action.toggled.connect(self.set_belly_ram)
@@ -742,6 +847,7 @@ class DesktopApp(QObject):
             self._walks_action,
             self._reminders_action,
             self._playful_action,
+            self._chatty_action,
             self._belly_action,
         ):
             menu.addAction(action)

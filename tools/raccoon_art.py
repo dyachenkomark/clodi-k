@@ -170,6 +170,9 @@ def front_face(*, eyes="open", look=0, mouth=None) -> list[str]:
     if mouth == "yawn":
         rows[10][7] = rows[10][8] = "M"
         rows[11][7] = rows[11][8] = "P"
+    elif mouth == "open":
+        rows[10][7] = rows[10][8] = "M"
+        rows[11][7] = rows[11][8] = "W"
     return ["".join(r) for r in rows]
 
 
@@ -382,6 +385,261 @@ def walk_up_right(phase: int) -> list[str]:
     return compose(head, far, body, near, tail)
 
 
+# ---------------- действия ----------------
+
+
+def limb(layer: Layer, x0: float, y0: float, x1: float, y1: float, ch: str = "G") -> None:
+    """Лапа отрезком толщиной два пикселя, на конце подушечка."""
+    steps = max(1, round(max(abs(x1 - x0), abs(y1 - y0)) * 2))
+    for i in range(steps + 1):
+        t = i / steps
+        layer.ellipse(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 1.0, 1.0, ch)
+    layer.ellipse(x1, y1, 1.4, 1.4, ch)
+
+
+def raw(points: list[tuple[int, int]], ch: str) -> Layer:
+    """Пиксели без контура: ноты, брызги, пар, земля."""
+    layer = Layer(raw=True)
+    for x, y in points:
+        layer.set(x, y, ch)
+    return layer
+
+
+def shift(frame: list[str], dx: int = 0, dy: int = 0) -> list[str]:
+    """Сдвиг всего кадра: наклоны в танце, подпрыгивание."""
+    out = [["."] * W for _ in range(H)]
+    for y, row in enumerate(frame):
+        for x, ch in enumerate(row):
+            if ch != "." and 0 <= x + dx < W and 0 <= y + dy < H:
+                out[y + dy][x + dx] = ch
+    return ["".join(r) for r in out]
+
+
+def rotate_ccw(rows: list[str]) -> list[str]:
+    width = len(rows[0])
+    return ["".join(row[width - 1 - i] for row in rows) for i in range(width)]
+
+
+SIT_TAIL = ([(18.5, 15.6), (21.5, 16.9), (24.0, 17.0), (25.6, 15.8)], [2.2, 2.2, 1.9, 1.1])
+WAG_TAIL = ([(18.5, 15.4), (21.2, 14.4), (23.2, 12.6), (24.2, 10.6)], [2.2, 2.2, 1.9, 1.1])
+
+
+def seated(
+    *,
+    eyes="open",
+    look=0,
+    mouth=None,
+    head_dx=0,
+    head_dy=0,
+    tail=SIT_TAIL,
+    paws_down=(True, True),
+    back=(),
+    front=(),
+) -> list[str]:
+    """Сидит анфас: хвост на полу, задние лапы, тело, голова, затем предметы и лапы спереди."""
+    tail_layer = striped_tail(*tail)
+    hind = Layer()
+    hind.ellipse(9.2, 17.3, 2.6, 1.5, "g")
+    hind.ellipse(18.8, 17.3, 2.6, 1.5, "g")
+    body = Layer()
+    body.ellipse(14.0, 14.2, 5.6, 4.9, "G")
+    body.ellipse(14.0, 15.2, 3.9, 2.9, "W", only=True)
+    feet = Layer()
+    for x, down in zip((11.8, 16.2), paws_down, strict=True):
+        if down:
+            feet.ellipse(x, 18.0, 1.5, 1.1, "G")
+    head = stamp(front_face(eyes=eyes, look=look, mouth=mouth), 6 + head_dx, head_dy)
+    return compose(*back, tail_layer, hind, body, feet, head, *front)
+
+
+def arms(*segments: tuple[float, float, float, float]) -> Layer:
+    layer = Layer()
+    for x0, y0, x1, y1 in segments:
+        limb(layer, x0, y0, x1, y1)
+    return layer
+
+
+def note(x: int, y: int) -> list[tuple[int, int]]:
+    """Нотка ♪: флажок, палочка, головка."""
+    return [(x + 1, y), (x, y), (x, y + 1), (x, y + 2), (x - 1, y + 2), (x - 1, y + 3), (x, y + 3)]
+
+
+def scratch(frame: int) -> list[str]:
+    leg = Layer()
+    limb(leg, 8.5, 16.0, 5.6, 6.2 + frame, "g")
+    return seated(eyes="closed", head_dx=1, paws_down=(False, True), front=(leg,))
+
+
+def roll(frame: int) -> list[str]:
+    wiggle = (1, -1)[frame]
+    tail = striped_tail([(21.5, 15.2), (24.0, 16.0), (26.2, 15.0)], [2.2, 2.0, 1.1])
+    body = Layer()
+    body.ellipse(15.0, 14.6, 7.2, 3.8, "G")
+    body.ellipse(15.0, 13.8, 5.0, 2.2, "W", only=True)
+    legs = Layer()
+    for x, dx in ((11.0, wiggle), (14.0, -wiggle), (17.5, wiggle), (20.5, -wiggle)):
+        limb(legs, x, 12.5, x + dx, 6.8, "G")
+    head = stamp(rotate_ccw(front_face(eyes="closed", mouth="open")), 0, 4)
+    return compose(tail, body, legs, head)
+
+
+def dance(frame: int) -> list[str]:
+    up = arms((9.0, 12.5, 3.5, 7.5), (19.0, 12.5, 24.5, 7.5))
+    chest = arms((10.5, 13.5, 12.0, 14.0), (17.5, 13.5, 16.0, 14.0))
+    if frame == 3:
+        return seated(eyes="closed", mouth="open", front=(chest,))
+    body = seated(eyes="closed", mouth="open", front=(up,))
+    return shift(body, dx=(-1, 0, 1)[frame], dy=-1 if frame == 1 else 0)
+
+
+def peek(frame: int) -> list[str]:
+    paws = Layer()
+    limb(paws, 9.0, 13.5, 9.8, 7.4)
+    paws.ellipse(9.8, 7.0, 2.0, 1.8, "G")
+    if frame == 0:
+        limb(paws, 19.0, 13.5, 18.2, 7.4)
+        paws.ellipse(18.2, 7.0, 2.0, 1.8, "G")
+    else:
+        limb(paws, 19.0, 13.5, 17.5, 14.5)
+    return seated(eyes="open", look=1 if frame else 0, front=(paws,))
+
+
+def sneeze(frame: int) -> list[str]:
+    if frame == 0:
+        return seated(eyes="closed")
+    if frame == 1:
+        spray = raw([(10, 12), (12, 13), (15, 13), (17, 12), (9, 14), (18, 14)], "Z")
+        return seated(eyes="closed", mouth="open", head_dy=1, front=(spray,))
+    return seated()
+
+
+def side_pose(*, head_dy=0, legs=(0, 0), extra=()) -> list[str]:
+    """Стоит боком, смотрит вправо: для копания и обнюхивания."""
+    far = Layer()
+    for x in (8, 17):
+        far.rect(x, 14, x + 1, 18, "g")
+    tail = striped_tail([(6.4, 11.6), (4.0, 10.6), (2.0, 8.9)], [2.4, 2.2, 1.1])
+    body = Layer()
+    body.ellipse(12.8, 12.2, 7.6, 3.9, "G")
+    for x in range(6, 20):
+        if (x, 15) in body.px:
+            body.set(x, 15, "W")
+    near = Layer()
+    for x, dx in zip((7, 16), legs, strict=True):
+        near.rect(x + dx, 14, x + dx + 1, 18, "G")
+        near.rect(x + dx, 18, x + dx + 1, 18, "g")
+    head = stamp(SIDE_HEAD, 15, 2 + head_dy)
+    return compose(far, tail, body, near, head, *extra)
+
+
+def dig(frame: int) -> list[str]:
+    dirt = [(4, 14), (2, 12), (5, 11), (3, 15)] if frame else [(3, 13), (1, 10), (6, 12), (4, 16)]
+    return side_pose(head_dy=3, legs=(0, 2 if frame else -1), extra=(raw(dirt, "c"),))
+
+
+def sniff(frame: int) -> list[str]:
+    return side_pose(head_dy=4 + frame, legs=(0, 0))
+
+
+def play(frame: int) -> list[str]:
+    ball_at = ((23.5, 16.8), (24.5, 12.5), (23.5, 9.5), (21.5, 13.0))[frame]
+    ball = Layer()
+    ball.ellipse(*ball_at, 1.5, 1.5, "P")
+    front = [ball]
+    if frame == 3:
+        front.insert(0, arms((18.0, 13.5, 20.0, 13.0)))
+    return seated(look=1, paws_down=(True, frame != 3), front=tuple(front))
+
+
+def read(frame: int) -> list[str]:
+    book = Layer()
+    book.rect(11, 13, 16, 16, "C")
+    book.rect(13, 13, 14, 16, "c")
+    paws = arms((10.0, 13.0, 10.8, 15.0), (18.0, 13.0, 17.2, 15.0))
+    return seated(look=(-1, 1)[frame], front=(book, paws))
+
+
+def sip(frame: int) -> list[str]:
+    lift = 2 if frame else 0
+    lift = 3 if frame else 0
+    mug = Layer()
+    mug.rect(12, 12 - lift, 16, 16 - lift, "P")
+    mug.rect(13, 12 - lift, 15, 12 - lift, "c")
+    mug.set(11, 13 - lift, "P")
+    mug.set(11, 14 - lift, "P")
+    steam = raw([(13, 10), (14, 9), (13, 8), (15, 7)], "g") if not frame else Layer()
+    paw = arms((19.0, 14.0, 17.4, 14.2 - lift))
+    return seated(eyes="closed" if frame else "open", front=(mug, paw, steam))
+
+
+def clap(frame: int) -> list[str]:
+    if frame:
+        paws = arms((10.5, 13.5, 13.4, 12.6), (17.5, 13.5, 14.6, 12.6))
+    else:
+        paws = arms((10.5, 13.5, 10.8, 12.4), (17.5, 13.5, 17.2, 12.4))
+    return seated(eyes="closed", mouth="open", front=(paws,))
+
+
+def doze(frame: int) -> list[str]:
+    return seated(eyes="closed", head_dy=frame)
+
+
+def sing(frame: int) -> list[str]:
+    notes = note(22, 2) + note(25, 6) if frame else note(21, 5) + note(24, 1)
+    return seated(eyes="closed", mouth="open", front=(raw(notes, "Z"),))
+
+
+def flex(frame: int) -> list[str]:
+    bent = arms(
+        (9.5, 12.5, 5.5, 10.5),
+        (5.5, 10.5, 6.5, 6.5 - frame),
+        (18.5, 12.5, 22.5, 10.5),
+        (22.5, 10.5, 21.5, 6.5 - frame),
+    )
+    sparkle = raw([(3, 5), (25, 5), (2, 8), (26, 8)] if frame else [(4, 3), (24, 3)], "Z")
+    return seated(front=(bent, sparkle))
+
+
+def tailwag(frame: int) -> list[str]:
+    return seated(tail=(SIT_TAIL, WAG_TAIL)[frame])
+
+
+def trash(frame: int) -> list[str]:
+    can = Layer()
+    can.rect(20, 11, 25, 18, "g")
+    can.rect(19, 10, 26, 10, "m")
+    for x in (22, 24):
+        for y in range(12, 18):
+            can.set(x, y, "m")
+    if frame == 0:
+        reach = arms((17.0, 13.0, 20.5, 10.0))
+        figure = seated(look=1, paws_down=(True, False), front=(reach,))
+    elif frame == 1:
+        reach = arms((17.0, 13.0, 21.5, 11.0))
+        figure = seated(eyes="closed", paws_down=(True, False), front=(reach,))
+    else:
+        paper = Layer()
+        paper.rect(3, 2, 6, 4, "W")
+        lines = raw([(4, 3), (5, 3)], "g")
+        figure = seated(mouth="open", front=(arms((9.5, 12.5, 5.5, 5.5)), paper, lines))
+    frame_rows = shift(figure, dx=-3)
+    return compose_on(frame_rows, can)
+
+
+def compose_on(frame: list[str], *layers: Layer) -> list[str]:
+    """Положить слои поверх готового кадра."""
+    grid = [list(r) for r in frame]
+    for layer in layers:
+        for (x, y), ch in (layer.px if layer.raw else layer.outlined()).items():
+            grid[y][x] = ch
+    return ["".join(r) for r in grid]
+
+
+def hiccup(frame: int) -> list[str]:
+    face = {"eyes": "closed", "mouth": "open"} if frame else {}
+    return shift(seated(**face), dy=-frame)
+
+
 def animations() -> dict[str, tuple[str, list[list[str]]]]:
     return {
         "sit": ("Сидит на полу анфас. Второй кадр — моргание.", [sit(), sit(eyes="closed")]),
@@ -414,6 +672,23 @@ def animations() -> dict[str, tuple[str, list[list[str]]]]:
             ],
         ),
         "look": ("Косится на курсор: влево, вправо.", [sit(look=-1), sit(look=1)]),
+        "scratch": ("Чешет ухо задней лапой.", [scratch(0), scratch(1)]),
+        "roll": ("Валяется на спине лапами вверх.", [roll(0), roll(1)]),
+        "dance": ("Танцует.", [dance(i) for i in range(4)]),
+        "peek": ("Ку-ку: закрыл глаза лапами и подглядывает.", [peek(0), peek(1)]),
+        "sneeze": ("Чихает.", [sneeze(0), sneeze(0), sneeze(1), sneeze(2)]),
+        "dig": ("Копает ямку, летит земля.", [dig(0), dig(1)]),
+        "sniff": ("Нюхает пол.", [sniff(0), sniff(1)]),
+        "play": ("Играет с мячиком.", [play(i) for i in range(4)]),
+        "read": ("Читает книжку.", [read(0), read(1)]),
+        "sip": ("Пьёт какао.", [sip(0), sip(0), sip(1)]),
+        "clap": ("Хлопает в ладоши.", [clap(0), clap(1)]),
+        "doze": ("Клюёт носом сидя.", [doze(0), doze(1)]),
+        "sing": ("Поёт, летят нотки.", [sing(0), sing(1)]),
+        "flex": ("Показывает мускулы.", [flex(0), flex(1)]),
+        "tailwag": ("Виляет хвостом.", [tailwag(0), tailwag(1)]),
+        "trash": ("Роется в мусорке и находит бумажку.", [trash(0), trash(1), trash(2)]),
+        "hiccup": ("Икает.", [hiccup(0), hiccup(0), hiccup(1)]),
     }
 
 
