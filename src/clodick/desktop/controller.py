@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 
 # Сколько длится кадр анимации, секунды. Для сидения первый кадр длится случайно 2.5–6 с.
 # Кадры действий — в actions.py.
-FRAME_SECONDS = {"sleep": 0.9, "wave": 0.3, "walk": 0.18}
+FRAME_SECONDS = {"sleep": 0.9, "wave": 0.3, "walk": 0.18, "climb": 0.28, "climb_hang": 1.0}
 BLINK_SECONDS = 0.15
 ACTIVE_TICK_MS = 80
 IDLE_TICK_MS = 1000
@@ -62,9 +62,6 @@ START_MARGIN = 24
 
 # Игривость. Курсор проверяется раз в CURSOR_POLL_MS.
 CURSOR_POLL_MS = 100
-# Курсор пролетает рядом быстрее этого (пикселей в секунду) — енот отбегает.
-DODGE_SPEED = 1500
-DODGE_COOLDOWN = 4.0
 # Курсор стоит на еноте почти неподвижно (медленнее PET_SPEED) PET_SECONDS — это поглаживание.
 PET_SPEED = 60
 PET_SECONDS = 1.5
@@ -94,18 +91,6 @@ DIAGONALS = {
 }
 # В каких позах пузо видно спереди и на нём пишется RAM.
 BELLY_MODES = (Mode.SIT, Mode.WAVE)
-
-
-def crosses(rect: QRect, start: QPoint, end: QPoint) -> bool:
-    """Проходит ли отрезок start–end через rect. Быстрый курсор между замерами пролетает
-    зону целиком, поэтому смотрим весь путь, а не одну точку."""
-    steps = max(1, (end - start).manhattanLength() // 4)
-    for i in range(steps + 1):
-        x = start.x() + (end.x() - start.x()) * i // steps
-        y = start.y() + (end.y() - start.y()) * i // steps
-        if rect.contains(x, y):
-            return True
-    return False
 
 
 class DesktopApp(QObject):
@@ -163,7 +148,6 @@ class DesktopApp(QObject):
         self._last_cursor: QPoint | None = None
         self._last_cursor_time = 0.0
         self._pet_since: float | None = None
-        self._dodge_ready = 0.0
         self._pet_ready = 0.0
         self._hop: list[int] = []
         self._chatty = bool(state.get("chatty", True))
@@ -189,6 +173,7 @@ class DesktopApp(QObject):
         self._hop_timer = QTimer(self, interval=HOP_FRAME_MS, timeout=self._hop_step)
 
         self.pet.clicked.connect(self._pet_clicked)
+        self.pet.double_clicked.connect(self._pet_double_clicked)
         self.bubble.clicked.connect(self.open_checklist)
         self.pet.drag_moved.connect(self._pet_dragged)
         self.pet.drag_finished.connect(self._save_position)
@@ -466,6 +451,15 @@ class DesktopApp(QObject):
             log.info("напоминание: %s", text)
             self.say(text)
 
+    def _pet_double_clicked(self) -> None:
+        """Двойной клик: енот пугается и убегает, потом возвращается на место."""
+        self.checklist.hide()
+        pos = self._cursor()
+        if self.brain.flee(pos.x(), pos.y(), self._pet_size().width()):
+            self._after_brain_change()
+            if self._rng.random() < 0.6:
+                self.chat(self._rng.choice(("Eek!", "Can't catch me!", "Nope!")), 2.5)
+
     def _pet_clicked(self) -> None:
         self.brain.wake()
         self._after_brain_change()
@@ -527,6 +521,9 @@ class DesktopApp(QObject):
             return (action, 1) if action in animations else ("sit", 1)
         if mode is Mode.WALK:
             return self._walk_animation()
+        if mode is Mode.CLIMB:
+            hanging = self.brain.climb_phase == "hang" and "climb_hang" in animations
+            return ("climb_hang" if hanging else "climb"), 1
         if mode is Mode.SIT and self._look is not None and "look" in animations:
             return "look", 1
         return mode.value, 1
@@ -569,6 +566,8 @@ class DesktopApp(QObject):
             seconds = BLINK_SECONDS if self._frame_index else random.uniform(2.5, 6.0)
         elif mode == "act" and self.brain.action != "spin":
             seconds = ACTIONS[self.brain.action].frame
+        elif mode == "climb":
+            seconds = FRAME_SECONDS[self._animation()[0]]
         else:
             seconds = FRAME_SECONDS["walk" if mode == "act" else mode]
         self._anim_timer.start(int(seconds * 1000))
@@ -610,7 +609,8 @@ class DesktopApp(QObject):
         self._place_pet()
 
     def _watch_cursor(self, now: float | None = None) -> None:
-        """Смотрит на курсор: быстрый рядом — отбежать, неподвижный на еноте — гладят."""
+        """Смотрит на курсор: косится на него, подходит к долго стоящему, а неподвижный
+        курсор на еноте — это поглаживание."""
         now = time.monotonic() if now is None else now
         pos = self._cursor()
         last, last_time = self._last_cursor, self._last_cursor_time
@@ -621,27 +621,6 @@ class DesktopApp(QObject):
         speed = (pos - last).manhattanLength() / (now - last_time)
         rect = self.pet.geometry()
         mode = self.brain.mode
-        if (
-            speed > DODGE_SPEED
-            and now >= self._dodge_ready
-            and mode not in (Mode.WALK, Mode.WAVE)
-            and crosses(rect.adjusted(-16, -16, 16, 16), last, pos)
-        ):
-            # Курсор будто толкает: енот отбегает туда, куда тот летел.
-            push = pos - last
-            length = max(1.0, (push.x() ** 2 + push.y() ** 2) ** 0.5)
-            distance = rect.width() * 1.5
-            dx, dy = push.x() / length * distance, push.y() / length * distance
-            x, y = self.brain.x, self.brain.y
-            if not self.brain.dodge(x + dx, y + dy):
-                # Упёрся в край экрана — бежит в другую сторону.
-                self.brain.dodge(x - dx, y - dy)
-            self._dodge_ready = now + DODGE_COOLDOWN
-            self._pet_since = None
-            self._after_brain_change()
-            if self._rng.random() < REACTION_LINE_CHANCE:
-                self.chat(self._rng.choice(("Whoa!", "Hey, careful!", "Eek!")), 2.5)
-            return
         self._watch_still(pos, speed, now)
         if rect.contains(pos) and speed < PET_SPEED and mode is Mode.SIT:
             if self._pet_since is None:
@@ -694,7 +673,7 @@ class DesktopApp(QObject):
         return {
             name: action
             for name, action in ACTIONS.items()
-            if action.weight > 0 and (action.kind != "anim" or name in animations)
+            if action.weight > 0 and (action.kind in ("spin", "zoomies") or name in animations)
         }
 
     def _update_belly(self) -> None:

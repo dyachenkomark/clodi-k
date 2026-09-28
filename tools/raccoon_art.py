@@ -640,6 +640,40 @@ def hiccup(frame: int) -> list[str]:
     return shift(seated(**face), dy=-frame)
 
 
+# ---------------- лазает по правому краю ----------------
+
+
+def climb_body(phase: int) -> tuple[Layer, Layer, Layer, Layer]:
+    """Тело вертикально, пузом к правому краю кадра (к «стволу»), хвост свисает вниз."""
+    reach = (0, 2)[phase % 2]
+    far = Layer()
+    limb(far, 20.5, 8.5, 26.0, 7.0 + reach, "g")
+    limb(far, 20.5, 15.0, 26.0, 16.5 - reach, "g")
+    tail = striped_tail(
+        [(17.6, 16.4), (15.0, 17.2), (12.4, 17.4), (10.2, 16.6)], [2.2, 2.1, 1.9, 1.1]
+    )
+    body = Layer()
+    body.ellipse(19.5, 12.0, 3.8, 6.2, "G")
+    body.ellipse(21.4, 12.4, 1.6, 4.6, "W", only=True)
+    near = Layer()
+    limb(near, 21.0, 9.0, 26.0, 5.0 + 2 - reach, "G")
+    limb(near, 21.0, 15.5, 26.0, 18.0 - 2 + reach, "G")
+    return far, tail, body, near
+
+
+def climb(phase: int) -> list[str]:
+    far, tail, body, near = climb_body(phase)
+    head = stamp(SIDE_HEAD, 14, 0)
+    return compose(far, tail, body, head, near)
+
+
+def climb_hang(frame: int) -> list[str]:
+    """Висит наверху и оглядывается на зрителя."""
+    far, tail, body, near = climb_body(0)
+    head = stamp(front_face(look=-1 if frame else 0), 9, 0)
+    return compose(far, tail, body, head, near)
+
+
 def animations() -> dict[str, tuple[str, list[list[str]]]]:
     return {
         "sit": ("Сидит на полу анфас. Второй кадр — моргание.", [sit(), sit(eyes="closed")]),
@@ -689,6 +723,8 @@ def animations() -> dict[str, tuple[str, list[list[str]]]]:
         "tailwag": ("Виляет хвостом.", [tailwag(0), tailwag(1)]),
         "trash": ("Роется в мусорке и находит бумажку.", [trash(0), trash(1), trash(2)]),
         "hiccup": ("Икает.", [hiccup(0), hiccup(0), hiccup(1)]),
+        "climb": ("Лезет по правому краю экрана, как по дереву.", [climb(0), climb(1)]),
+        "climb_hang": ("Висит наверху и оглядывается.", [climb_hang(0), climb_hang(1)]),
     }
 
 

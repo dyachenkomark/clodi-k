@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -72,16 +73,21 @@ def pixel_text_width(text: str, pixel: int) -> int:
 class PetWindow(QWidget):
     """Прозрачное окно персонажа поверх всех окон.
 
-    Клик — сигнал clicked, перетаскивание двигает окно и шлёт drag_moved.
+    Клик — сигнал clicked, двойной клик — double_clicked, перетаскивание двигает окно
+    и шлёт drag_moved. Одиночный клик приходит с паузой: вдруг за ним будет второй.
     Экран для персонажа — пол: под лапами лежит тень, в прыжке он отрывается от неё.
     Поверх кадра рисует надпись на пузе и сердечко.
     Кадр сдвинут вниз на sprite_offset: над ним запас под прыжок.
     """
 
     clicked = Signal()
+    double_clicked = Signal()
     context_requested = Signal(QPoint)
     drag_moved = Signal()
     drag_finished = Signal()
+
+    # Пауза перед одиночным кликом, мс: не дольше системной для двойного клика.
+    CLICK_DELAY_MS = 300
 
     def __init__(self, scale: int = 4) -> None:
         super().__init__(None, OVERLAY_FLAGS)
@@ -96,6 +102,8 @@ class PetWindow(QWidget):
         self._lift = 0
         self.heart_visible = False
         self._heart_timer = QTimer(self, singleShot=True, timeout=self._hide_heart)
+        self._click_timer = QTimer(self, singleShot=True, timeout=self.clicked.emit)
+        self._double = False
         self._press: QPoint | None = None
         self._grab_offset = QPoint()
         self._dragging = False
@@ -216,8 +224,11 @@ class PetWindow(QWidget):
         if self._press is None:
             return
         pos = event.globalPosition().toPoint()
-        if not self._dragging and (pos - self._press).manhattanLength() > 4:
+        # Системный порог: дрогнувшая при клике рука — ещё не перетаскивание.
+        threshold = QApplication.startDragDistance()
+        if not self._dragging and (pos - self._press).manhattanLength() > threshold:
             self._dragging = True
+            self._click_timer.stop()
         if self._dragging:
             self.move(pos - self._grab_offset)
             self.drag_moved.emit()
@@ -227,10 +238,21 @@ class PetWindow(QWidget):
             return
         if self._dragging:
             self.drag_finished.emit()
+        elif self._double:
+            self._double = False
         else:
-            self.clicked.emit()
+            delay = min(self.CLICK_DELAY_MS, QApplication.doubleClickInterval())
+            self._click_timer.start(delay)
         self._press = None
         self._dragging = False
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._click_timer.stop()
+        self._double = True
+        self._press = event.globalPosition().toPoint()
+        self.double_clicked.emit()
 
 
 class BubbleWindow(QWidget):

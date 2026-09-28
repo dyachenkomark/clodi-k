@@ -286,17 +286,6 @@ def test_ram_is_written_on_belly(playful_desktop):
     assert desktop.pet.belly_text is None
 
 
-def test_fast_cursor_makes_raccoon_dodge(playful_desktop):
-    desktop, cursor = playful_desktop
-    center = desktop.pet.geometry().center()
-    cursor.pos = QPoint(center.x() - 300, center.y())
-    desktop._watch_cursor(now=10.0)
-    cursor.pos = center
-    desktop._watch_cursor(now=10.1)
-    assert desktop.brain.mode is Mode.WALK
-    assert not desktop.brain.at_home
-
-
 def test_slow_cursor_does_not_scare_and_pets(playful_desktop):
     desktop, cursor = playful_desktop
     center = desktop.pet.geometry().center()
@@ -404,18 +393,6 @@ def test_raccoon_looks_at_nearby_cursor(playful_desktop):
     assert desktop._look is None
 
 
-def test_dodge_catches_cursor_that_jumps_over_raccoon_between_polls(playful_desktop):
-    desktop, cursor = playful_desktop
-    rect = desktop.pet.geometry()
-    y = rect.center().y()
-    cursor.pos = QPoint(rect.left() - 150, y)
-    desktop._watch_cursor(now=10.0)
-    cursor.pos = QPoint(rect.right() + 150, y)
-    desktop._watch_cursor(now=10.1)
-    assert desktop.brain.mode is Mode.WALK
-    assert desktop.brain.facing == "right"
-
-
 @pytest.mark.parametrize(
     ("dx", "dy", "animation"),
     [
@@ -509,3 +486,70 @@ def test_summon_brings_raccoon_to_cursor_screen(playful_desktop):
     assert desktop.pet.isVisible()
     assert screen.contains(desktop.pet.geometry())
     assert screen.contains(QPoint(*desktop._state.get("pet_pos")))
+
+
+def test_fast_cursor_over_raccoon_does_not_scare_it(playful_desktop):
+    """Раньше быстрый курсор сгонял енота прямо из-под клика."""
+    desktop, cursor = playful_desktop
+    center = desktop.pet.geometry().center()
+    cursor.pos = QPoint(center.x() - 300, center.y())
+    desktop._watch_cursor(now=10.0)
+    cursor.pos = center
+    desktop._watch_cursor(now=10.1)
+    assert desktop.brain.at_home
+    assert desktop.brain.mode is not Mode.WALK
+
+
+def test_double_click_makes_raccoon_run_away(playful_desktop):
+    desktop, cursor = playful_desktop
+    cursor.pos = desktop.pet.geometry().center() + QPoint(-5, 0)
+    desktop.pet.double_clicked.emit()
+    assert desktop.brain.mode is Mode.WALK
+    assert desktop.brain.facing == "right"
+    assert not desktop.checklist.isVisible()
+
+
+def test_single_click_opens_checklist_after_short_pause(qapp, playful_desktop):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtTest import QTest
+
+    desktop, _ = playful_desktop
+    pet = desktop.pet
+    local = QPointF(pet.width() / 2, pet.height() / 2)
+    glob = QPointF(pet.mapToGlobal(local.toPoint()))
+    for kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+        event = QMouseEvent(
+            kind,
+            local,
+            glob,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        qapp.sendEvent(pet, event)
+    assert not desktop.checklist.isVisible()
+    QTest.qWait(pet.CLICK_DELAY_MS + 150)
+    assert desktop.checklist.isVisible()
+
+
+def test_raccoon_climbs_right_edge_and_comes_back(playful_desktop):
+    desktop, _ = playful_desktop
+    brain = desktop.brain
+    assert "climb" in brain.actions
+    home = brain.home
+    assert brain.climb()
+    seen = set()
+    for _ in range(3000):
+        brain.tick(0.1)
+        desktop._after_brain_change()
+        seen.add((brain.mode, brain.climb_phase))
+        if brain.mode is Mode.CLIMB:
+            assert brain.x == brain.area.right
+            assert desktop._shown_anim[0] in ("climb", "climb_hang")
+            assert desktop.pet.belly_text is None
+        if brain.at_home and (Mode.CLIMB, "down") in seen:
+            break
+    assert {(Mode.CLIMB, "up"), (Mode.CLIMB, "hang"), (Mode.CLIMB, "down")} <= seen
+    assert brain.at_home
+    assert brain.home == home

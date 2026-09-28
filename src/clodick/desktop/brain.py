@@ -21,6 +21,8 @@ class Mode(Enum):
     WALK = "walk"
     # Занят действием из actions.py: какое — в Brain.action.
     ACT = "act"
+    # Лазает по правому краю экрана: вверх, висит, вниз.
+    CLIMB = "climb"
 
 
 # Куда смотрит на ходу: восемь направлений через 45°. Экран: y растёт вниз.
@@ -63,6 +65,13 @@ SPIN_STEP = 0.12
 # Носится зигзагом: сколько точек и как далеко от места.
 ZOOMIES_POINTS = 4
 ZOOMIES_RADIUS = 160.0
+# Лазание по правому краю: скорость относительно шага, на какую долю пути до верха
+# экрана залезает, сколько висит наверху.
+CLIMB_SPEED = 0.6
+CLIMB_HEIGHT = (0.35, 0.75)
+HANG = (3.0, 6.0)
+# Убегает по двойному клику: во сколько раз дальше своей ширины.
+FLEE_DISTANCE = 4.0
 
 
 class Brain:
@@ -98,6 +107,9 @@ class Brain:
         self._route: list[tuple[float, float]] = []
         self._rush = False
         self._spin = 0.0
+        # Лазание: to_edge (идёт к краю), up, hang, down или None.
+        self.climb_phase: str | None = None
+        self._ground_y = 0.0
         self.sleepy = False
         # Какое действие он начал сам с прошлого pop_started(): чтобы сказать реплику.
         self._started: str | None = None
@@ -110,7 +122,8 @@ class Brain:
     @property
     def is_active(self) -> bool:
         """Нужны ли частые обновления: персонаж двигается, машет или кружится."""
-        return self.mode in (Mode.WALK, Mode.WAVE) or self.action == "spin"
+        moving_up_or_down = self.mode is Mode.CLIMB and self.climb_phase != "hang"
+        return self.mode in (Mode.WALK, Mode.WAVE) or self.action == "spin" or moving_up_or_down
 
     def pop_started(self) -> str | None:
         started, self._started = self._started, None
@@ -123,6 +136,7 @@ class Brain:
         self._outside = False
         self._target = None
         self._route = []
+        self.climb_phase = None
         self._sit()
 
     def set_area(self, area: Area) -> None:
@@ -139,12 +153,19 @@ class Brain:
 
     def set_walks(self, walks: bool) -> None:
         self.walks = walks
-        if not walks and self._outside and self.mode is not Mode.WAVE:
-            self._route = []
-            self._walk_to(*self.home)
+        if walks or not self._outside or self.mode is Mode.WAVE:
+            return
+        if self.mode is Mode.CLIMB:
+            self._climb_down()
+            return
+        self._route = []
+        self.climb_phase = None
+        self._walk_to(*self.home)
 
     def wave(self, seconds: float = 5.0) -> None:
-        """Привлечь внимание: остановиться и помахать."""
+        """Привлечь внимание: остановиться и помахать. На краю экрана не машет — держится."""
+        if self.mode is Mode.CLIMB:
+            return
         self._set_mode(Mode.WAVE)
         self._timer = seconds
 
@@ -177,9 +198,38 @@ class Brain:
         self._walk_to(tx, ty)
         return True
 
+    def flee(self, from_x: float, from_y: float, width: float) -> bool:
+        """Убежать подальше от точки, например от двойного клика. Потом вернётся на место."""
+        if self.mode is Mode.CLIMB:
+            return False
+        cx, cy = self.x + width / 2, self.y + width / 2
+        dx, dy = cx - from_x, cy - from_y
+        length = math.hypot(dx, dy) or 1.0
+        if length < 1.5:
+            dx, dy, length = self.rng.choice((-1.0, 1.0)), 0.0, 1.0
+        distance = width * FLEE_DISTANCE
+        dx, dy = dx / length * distance, dy / length * distance
+        return self.dodge(self.x + dx, self.y + dy) or self.dodge(self.x - dx, self.y - dy)
+
+    def climb(self) -> bool:
+        """Пойти к правому краю экрана и полезть по нему вверх, как по дереву."""
+        if not self.walks or self.mode is Mode.CLIMB:
+            return False
+        edge = self.area.right
+        if abs(edge - self.x) > self.roam * 2 or self.y - self.area.top < self.speed * 3:
+            return False
+        self._outside = True
+        self._route = []
+        self.climb_phase = "to_edge"
+        if self.x == edge:
+            self._arrive()
+        else:
+            self._walk_to(edge, self.y)
+        return True
+
     def act(self, name: str, seconds: float) -> None:
         """Заняться действием на месте: поесть, похлопать. Прогулку не прерывает."""
-        if self.mode is Mode.WALK:
+        if self.mode in (Mode.WALK, Mode.CLIMB):
             return
         self._set_mode(Mode.ACT, name)
         self._timer = seconds
@@ -191,6 +241,9 @@ class Brain:
     def tick(self, dt: float) -> None:
         if self.mode is Mode.WALK:
             self._step(dt)
+            return
+        if self.mode is Mode.CLIMB:
+            self._climb_tick(dt)
             return
         if self.action == "spin":
             self._spin += dt
@@ -242,7 +295,7 @@ class Brain:
                 weight = 0
             elif mood == LIVELY and action.lively:
                 weight *= 3
-            if action.kind == "zoomies" and not self.walks:
+            if action.kind in ("zoomies", "climb") and not self.walks:
                 weight = 0
             if weight > 0:
                 weights[name] = weight
@@ -258,6 +311,11 @@ class Brain:
     def _start(self, name: str) -> None:
         action = self.actions[name]
         self._started = name
+        if action.kind == "climb":
+            if not self.climb():
+                self._started = None
+                self._sit()
+            return
         if action.kind == "zoomies":
             self._route = [self._zoomies_point() for _ in range(ZOOMIES_POINTS)]
             self._outside = True
@@ -317,6 +375,16 @@ class Brain:
 
     def _arrive(self) -> None:
         self._target = None
+        if self.climb_phase == "to_edge":
+            # У края: полез вверх на случайную высоту.
+            self._ground_y = self.y
+            share = self.rng.uniform(*CLIMB_HEIGHT)
+            top = self.y - (self.y - self.area.top) * share
+            self._set_mode(Mode.CLIMB)
+            self.climb_phase = "up"
+            self.facing = UP
+            self._target = (self.x, top)
+            return
         if self._route:
             x, y = self._route.pop(0)
             self._walk_to(x, y)
@@ -330,6 +398,35 @@ class Brain:
         else:
             self._set_mode(Mode.SIT)
             self._timer = self._pick(SIT_OUTSIDE)
+
+    def _climb_tick(self, dt: float) -> None:
+        if self.climb_phase == "hang":
+            self._timer -= dt
+            if self._timer <= 0:
+                self._climb_down()
+            return
+        assert self._target is not None
+        ty = self._target[1]
+        step = self.speed * CLIMB_SPEED * dt
+        if abs(ty - self.y) <= step:
+            self.y = ty
+            if self.climb_phase == "up":
+                self.climb_phase = "hang"
+                self._timer = self._pick(HANG)
+            else:
+                # Слез: посидит внизу и пойдёт домой.
+                self.climb_phase = None
+                self._target = None
+                self.facing = DOWN
+                self._set_mode(Mode.SIT)
+                self._timer = self._pick(SIT_OUTSIDE)
+        else:
+            self.y += step if ty > self.y else -step
+
+    def _climb_down(self) -> None:
+        self.climb_phase = "down"
+        self.facing = DOWN
+        self._target = (self.x, self._ground_y)
 
     def _sit(self) -> None:
         self._set_mode(Mode.SIT)

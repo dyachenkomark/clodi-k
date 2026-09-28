@@ -277,3 +277,43 @@ def test_act_does_not_interrupt_walk():
     brain._walk_to(100.0, 100.0)
     brain.act("eat", 3.0)
     assert brain.mode is Mode.WALK
+
+
+def test_climb_up_the_right_edge_hang_and_climb_down():
+    brain = make_brain(home=(900.0, 700.0))
+    assert brain.climb()
+    run_until(brain, lambda b: b.mode is Mode.CLIMB)
+    assert brain.x == 1000
+    run_until(brain, lambda b: b.climb_phase == "hang")
+    top = brain.y
+    assert top < 700
+    run_until(brain, lambda b: b.climb_phase == "down")
+    run_until(brain, lambda b: b.climb_phase is None)
+    assert brain.y == 700
+    run_until(brain, lambda b: b.at_home)
+    assert (brain.x, brain.y) == (900.0, 700.0)
+
+
+def test_no_climb_when_edge_is_too_far_or_walks_off():
+    assert not make_brain(home=(0.0, 700.0), roam=100.0).climb()
+    assert not make_brain(home=(900.0, 700.0), walks=False).climb()
+
+
+def test_disabling_walks_brings_climber_down():
+    brain = make_brain(home=(900.0, 700.0))
+    brain.climb()
+    run_until(brain, lambda b: b.climb_phase == "hang")
+    brain.set_walks(False)
+    assert brain.climb_phase == "down"
+    run_until(brain, lambda b: b.at_home)
+
+
+def test_flee_runs_away_from_point():
+    brain = make_brain()
+    # Центр енота — (520, 420). Точка справа от него: бежит влево.
+    assert brain.flee(600.0, 420.0, width=40.0)
+    assert brain.facing == "left"
+    run_until(brain, lambda b: b.mode is Mode.SIT)
+    import math as m
+
+    assert m.dist((brain.x, brain.y), (500.0, 400.0)) > 100
