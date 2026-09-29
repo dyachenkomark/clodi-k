@@ -728,21 +728,32 @@ def animations() -> dict[str, tuple[str, list[list[str]]]]:
     }
 
 
-def character_toml() -> str:
+def character_toml(
+    *,
+    char_id: str = "raccoon",
+    name: str = "Raccoon",
+    description: str = "A grey masked raccoon who lives on your screen like on a floor.",
+    generator: str = "tools/raccoon_art.py",
+    palette: dict | None = None,
+    variants: dict | None = None,
+) -> str:
+    """Пакет персонажа. Другие персонажи (мышка) передают свои имя, цвета и генератор."""
+    palette = PALETTE if palette is None else palette
+    variants = VARIANTS if variants is None else variants
     lines = [
-        "# Персонаж cloDICK. Сгенерирован tools/raccoon_art.py — правьте генератор, не этот файл.",
-        'id = "raccoon"',
-        'name = "Raccoon"',
+        f"# Персонаж cloDICK. Сгенерирован {generator} — правьте генератор, не этот файл.",
+        f'id = "{char_id}"',
+        f'name = "{name}"',
         'author = "cloDICK"',
-        'description = "A grey masked raccoon who lives on your screen like on a floor."',
+        f'description = "{description}"',
         f"size = [{W}, {H}]",
-        "# Белое пузо: тут пишется загрузка RAM.",
+        "# Светлое пузо: тут пишется загрузка RAM.",
         "belly = [10, 13, 8, 4]",
         "",
         "[palette]",
-        *(f'{k} = "{v}"' for k, v in PALETTE.items()),
+        *(f'{k} = "{v}"' for k, v in palette.items()),
     ]
-    for theme, colors in VARIANTS.items():
+    for theme, colors in variants.items():
         lines += ["", f"[variants.{theme}]", *(f'{k} = "{v}"' for k, v in colors.items())]
     for name, (comment, frames) in animations().items():
         for frame in frames:

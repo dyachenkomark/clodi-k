@@ -95,3 +95,11 @@ def test_builtin_raccoon_has_belly():
 def test_belly_must_fit_the_frame(tmp_path):
     with pytest.raises(CharacterError, match="belly"):
         load_character(minimal_pack(tmp_path / "blob", extra="belly = [1, 1, 5, 5]"))
+
+
+def test_builtin_mouse_has_every_raccoon_pose():
+    mouse = load_character(builtin_dir() / "mouse")
+    raccoon = load_character(builtin_dir() / DEFAULT_CHARACTER)
+    assert mouse.name == "Mouse"
+    assert set(mouse.animations) == set(raccoon.animations)
+    assert mouse.belly == raccoon.belly

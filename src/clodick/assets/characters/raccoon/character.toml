@@ -4,7 +4,7 @@ name = "Raccoon"
 author = "cloDICK"
 description = "A grey masked raccoon who lives on your screen like on a floor."
 size = [28, 20]
-# Белое пузо: тут пишется загрузка RAM.
+# Светлое пузо: тут пишется загрузка RAM.
 belly = [10, 13, 8, 4]
 
 [palette]

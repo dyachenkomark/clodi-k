@@ -600,3 +600,15 @@ def test_note_button_opens_editor_without_checking(playful_desktop):
     desktop.checklist.note_buttons["study"].click()
     assert desktop.checklist.note_editors["study"].isVisible()
     assert not desktop._tracker.status().items[1].done
+
+
+def test_switch_to_mouse_keeps_all_actions(playful_desktop):
+    desktop, _ = playful_desktop
+    assert "mouse" in desktop.characters
+    desktop.set_character("mouse")
+    assert desktop.character.name == "Mouse"
+    assert set(desktop.brain.actions) == set(desktop._available_actions())
+    assert len(desktop.brain.actions) >= 20
+    desktop.brain.act("dance", 2.0)
+    desktop._after_brain_change()
+    assert desktop._shown_anim == ("dance", 1)
