@@ -612,3 +612,16 @@ def test_switch_to_mouse_keeps_all_actions(playful_desktop):
     desktop.brain.act("dance", 2.0)
     desktop._after_brain_change()
     assert desktop._shown_anim == ("dance", 1)
+
+
+@pytest.mark.parametrize(
+    "dx, dy, flip", [(0, 200, 1), (0, -200, 1), (-200, -200, -1), (200, 100, 1)]
+)
+def test_penguin_slides_sideways_in_every_direction(playful_desktop, dx, dy, flip):
+    desktop, _ = playful_desktop
+    desktop.set_character("penguin")
+    assert "climb" not in desktop.brain.actions
+    desktop.brain.side = 1
+    desktop.brain._walk_to(desktop.brain.x + dx, desktop.brain.y + dy)
+    desktop._after_brain_change()
+    assert desktop._shown_anim == ("walk", flip)

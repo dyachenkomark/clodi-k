@@ -103,3 +103,12 @@ def test_builtin_mouse_has_every_raccoon_pose():
     assert mouse.name == "Mouse"
     assert set(mouse.animations) == set(raccoon.animations)
     assert mouse.belly == raccoon.belly
+
+
+def test_builtin_penguin_slides_instead_of_walking():
+    penguin = load_character(builtin_dir() / "penguin")
+    assert penguin.name == "Penguin"
+    assert "walk" in penguin.animations
+    for missing in ("walk_down", "walk_up", "walk_down_right", "climb", "scratch"):
+        assert missing not in penguin.animations
+    assert penguin.belly is not None

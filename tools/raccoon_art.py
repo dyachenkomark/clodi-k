@@ -736,8 +736,10 @@ def character_toml(
     generator: str = "tools/raccoon_art.py",
     palette: dict | None = None,
     variants: dict | None = None,
+    edit=None,
 ) -> str:
-    """Пакет персонажа. Другие персонажи (мышка) передают свои имя, цвета и генератор."""
+    """Пакет персонажа. Другие персонажи (мышка, пингвин) передают свои имя, цвета и
+    генератор. edit(animations) может заменить или убрать анимации."""
     palette = PALETTE if palette is None else palette
     variants = VARIANTS if variants is None else variants
     lines = [
@@ -755,7 +757,10 @@ def character_toml(
     ]
     for theme, colors in variants.items():
         lines += ["", f"[variants.{theme}]", *(f'{k} = "{v}"' for k, v in colors.items())]
-    for name, (comment, frames) in animations().items():
+    anims = animations()
+    if edit is not None:
+        anims = edit(anims)
+    for name, (comment, frames) in anims.items():
         for frame in frames:
             assert len(frame) == H and all(len(r) == W for r in frame), name
         body = ",\n".join("'''\n" + "\n".join(f) + "\n'''" for f in frames)
