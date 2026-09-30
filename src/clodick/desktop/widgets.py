@@ -490,6 +490,7 @@ class ChecklistPopup(QWidget):
     NOTE_WIDTH = 250
     # Вкладки тем переносятся на новую строку, когда шире этого.
     TOPICS_WIDTH = 330
+    MIN_WIDTH = 240
 
     def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -572,7 +573,7 @@ class ChecklistPopup(QWidget):
         self._signature: list = []
         self.meta_labels: dict[str, QLabel] = {}
         self.section_label: QLabel | None = None
-        self.setMinimumWidth(240)
+        self.setMinimumWidth(self.MIN_WIDTH)
 
     @property
     def boxes(self) -> dict[str, QCheckBox]:
@@ -652,8 +653,23 @@ class ChecklistPopup(QWidget):
         self._update_adder()
         self.topic_selected.emit(name)
         if self._status is not None:
-            self.set_status(self._status, self._ram, self._focus_today)
-            self.resized.emit()
+            self._stay_in_place(lambda: self.set_status(self._status, self._ram, self._focus_today))
+
+    def _stay_in_place(self, change) -> None:
+        """Сменить содержимое, не двигая окно: вкладки остаются под мышкой.
+
+        Верхний левый угол стоит на месте, ширина не уменьшается. Сдвигаемся, только
+        если окно иначе вылезет за край экрана.
+        """
+        corner = self.pos()
+        self.setMinimumWidth(max(self.minimumWidth(), self.width()))
+        change()
+        self.layout().activate()
+        self.adjustSize()
+        screen = self.screen().availableGeometry()
+        x = max(screen.left(), min(corner.x(), screen.right() - self.width()))
+        y = max(screen.top(), min(corner.y(), screen.bottom() - self.height()))
+        self.move(x, y)
 
     def topic_menu(self, name: str) -> QMenu:
         """Меню темы по правому клику."""
@@ -773,6 +789,7 @@ class ChecklistPopup(QWidget):
         Размер считается после show(): до показа Qt не знает окончательную раскладку,
         и окно потом вырастает вниз, прямо на персонажа.
         """
+        self.setMinimumWidth(self.MIN_WIDTH)  # ширину держим только пока листают вкладки
         self.show()
         self.layout().activate()
         self.adjustSize()

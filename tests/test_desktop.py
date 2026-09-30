@@ -802,3 +802,18 @@ def test_task_can_move_to_another_topic(make_desktop):
     assert [a.text() for a in move.actions() if a.text()] == ["Turkov", "Maga", "No topic"]
     next(a for a in move.actions() if a.text() == "Maga").trigger()
     assert tracker._repo.get_task(task.id).project == "Maga"
+
+
+def test_switching_topic_tabs_does_not_move_the_checklist(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    tracker.add_topic("Turkov")
+    tracker.add_topic("A very long topic name")
+    tracker.add_from_text("fix login", topic="Turkov")
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    corner, width = checklist.pos(), checklist.width()
+    checklist.topic_buttons["Turkov"].click()  # список короче
+    assert checklist.pos() == corner
+    assert checklist.width() >= width
+    checklist.topic_buttons[""].click()
+    assert checklist.pos() == corner
