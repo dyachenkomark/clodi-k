@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -92,6 +93,7 @@ QToolButton#pick {{
 }}
 QToolButton#pick:checked {{ border-color: {t.accent}; }}
 QToolButton#pick:hover {{ border-color: {t.muted}; }}
+QScrollArea#pagescroll, QScrollArea#pagescroll > QWidget > QWidget {{ background: transparent; }}
 """
     )
 
@@ -134,6 +136,7 @@ class SetupDialog(QWidget):
     llm_check_requested = Signal(str, str, str)  # адрес, модель, ключ
     llm_save_requested = Signal(str, str, str)
     finished = Signal()
+    closed = Signal()
     # Помощник входа через Google: открыть страницу, найти файл сам, выбрать файл руками.
     open_url_requested = Signal(str)
     client_find_requested = Signal()
@@ -155,9 +158,31 @@ class SetupDialog(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(panel)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setContentsMargins(16, 8, 10, 12)
+        # Крестик: закрыть мастер в любой момент. Вернуть — Setup в меню.
+        self.close_button = QToolButton(objectName="remove", text="×")
+        self.close_button.setToolTip("Close. Setup in the menu brings me back")
+        self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_button.clicked.connect(self.closed)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addStretch()
+        top.addWidget(self.close_button)
+        layout.addLayout(top)
         self.pages = Pages()
-        layout.addWidget(self.pages)
+        self.pages.setContentsMargins(0, 0, 6, 0)
+        # Страница выше экрана прокручивается внутри окна, а окно остаётся на экране.
+        self.scroll = QScrollArea(objectName="pagescroll")
+        self.scroll.setWidget(self.pages)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(self.scroll)
+        # Где стоит персонаж и какой экран: окно держится у него и в пределах экрана.
+        self._anchor: QRect | None = None
+        self._screen: QRect | None = None
+        self._moved = False
+        self._drag_offset = None
         self.pick_buttons: dict[str, QToolButton] = {}
         self._build_hello()
         self._build_sheet()
@@ -385,7 +410,8 @@ class SetupDialog(QWidget):
         self._step_labels: list[QLabel] = []
         # Точная ширина текста: иначе Qt неверно считает высоту строк с переносами
         # и последняя строка шага обрезается.
-        text_width = self.WIDTH - 32 - 16 - 60 - 16
+        # Минус отступы, номер, кнопка и место под полосу прокрутки на низком экране.
+        text_width = self.WIDTH - 32 - 16 - 60 - 16 - 14
         for number, (text, url) in enumerate(GUIDE_STEPS, start=1):
             row = QHBoxLayout()
             row.setSpacing(8)
@@ -451,25 +477,73 @@ class SetupDialog(QWidget):
     def show_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
         self._fit()
+        # Страницу показывают впервые: стиль к ней применится в следующем цикле событий,
+        # тогда размер надо пересчитать ещё раз.
+        QTimer.singleShot(0, self._fit)
 
     def _fit(self) -> None:
         """Окно по размеру видимой страницы."""
         # Высоту строк с переносами считаем, когда стиль со шрифтом уже применён.
+        # QLabel.heightForWidth здесь завышает высоту, поэтому меряем текст шрифтом сами.
         for label in getattr(self, "_step_labels", []):
             label.ensurePolished()
-            label.setMinimumHeight(label.heightForWidth(label.width()) + 4)
+            box = QFontMetrics(label.font()).boundingRect(
+                QRect(0, 0, label.width(), 10_000), Qt.TextFlag.TextWordWrap, label.text()
+            )
+            label.setFixedHeight(box.height() + 2)
+        current = self.pages.currentWidget()
+        # Только что показанная страница: раскладку пересчитать заново, иначе размер старый.
+        current.layout().invalidate()
+        current.layout().activate()
+        current.adjustSize()
+        wanted = current.layout().sizeHint().height()
+        # Сколько места под страницу: высота экрана минус рамка, крестик и запас.
+        limit = self._screen.height() - 70 if self._screen is not None else wanted
+        self.scroll.setFixedHeight(max(80, min(wanted, limit)))
+        self.scroll.verticalScrollBar().setValue(0)
         self.layout().activate()
         self.adjustSize()
+        if self.isVisible():
+            self._place()
 
     def open_near(self, anchor: QRect, screen: QRect) -> None:
         """Над персонажем, как чек-лист: не закрывает его и не вылезает за экран."""
+        self._anchor, self._screen, self._moved = anchor, screen, False
         self.show()
         self.raise_()
         self.activateWindow()
         self._fit()
-        x = anchor.center().x() - self.width() // 2
-        y = anchor.top() - self.height() - 6
-        if y < screen.top():
-            y = anchor.bottom() + 6
-        x = max(screen.left(), min(x, screen.right() - self.width()))
-        self.move(x, max(screen.top(), y))
+
+    def _place(self) -> None:
+        """Поставить окно у персонажа, а если его двигали — оставить, где поставили.
+        В любом случае целиком в пределах экрана: страницы бывают разной высоты."""
+        if self._screen is None:
+            return
+        screen = self._screen
+        if self._moved or self._anchor is None:
+            x, y = self.x(), self.y()
+        else:
+            anchor = self._anchor
+            x = anchor.center().x() - self.width() // 2
+            y = anchor.top() - self.height() - 6
+            if y < screen.top():
+                y = anchor.bottom() + 6
+        x = max(screen.left(), min(x, screen.right() + 1 - self.width()))
+        y = max(screen.top(), min(y, screen.bottom() + 1 - self.height()))
+        self.move(x, y)
+
+    # --- перетаскивание за пустое место ---
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self.pos()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_offset is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            self._moved = True
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag_offset is not None:
+            self._drag_offset = None
+            self._place()

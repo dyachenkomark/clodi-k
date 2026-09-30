@@ -493,3 +493,44 @@ def test_guide_walks_a_beginner_to_the_sign_in_button(setup_world, tmp_path):
     assert dialog.pages.currentIndex() == SHEET
     assert dialog.google_button.isVisibleTo(dialog)
     assert "Sign in with Google" in dialog.sheet_status.text()
+
+
+def test_tall_page_stays_on_screen_and_window_can_be_dragged(setup_world):
+    from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    desktop, _, _, _, _ = setup_world
+    desktop.open_setup()
+    dialog = desktop.setup
+    screen = QRect(0, 0, 1200, 700)
+    # Персонаж у самого низа экрана, как на панели задач.
+    dialog.open_near(QRect(1000, 620, 84, 78), screen)
+    dialog.show_page(GUIDE)
+    assert screen.contains(dialog.geometry()), dialog.geometry()
+    assert dialog.find_client.isVisibleTo(dialog)
+
+    def mouse(kind, point):
+        glob = QPointF(point)
+        local = QPointF(dialog.mapFromGlobal(point))
+        event = QMouseEvent(
+            kind, local, glob, Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        )  # fmt: skip
+        QApplication.sendEvent(dialog, event)
+
+    start = dialog.pos() + QPoint(40, 5)
+    mouse(QEvent.Type.MouseButtonPress, start)
+    mouse(QEvent.Type.MouseMove, start + QPoint(-300, 0))
+    mouse(QEvent.Type.MouseButtonRelease, start + QPoint(-300, 0))
+    moved = dialog.pos()
+    dialog.show_page(SHEET)  # после переноса окно остаётся, где его поставили
+    assert dialog.pos().x() == moved.x()
+    assert screen.contains(dialog.geometry())
+
+
+def test_close_button_hides_setup_and_it_does_not_come_back_by_itself(setup_world):
+    desktop, _, _, _, _ = setup_world
+    desktop.open_setup()
+    desktop.setup.close_button.click()
+    assert not desktop.setup.isVisible()
+    assert desktop._state.get("onboarding_done") is True

@@ -635,6 +635,7 @@ class DesktopApp(QObject):
         dialog.llm_check_requested.connect(lambda u, m, k: self._setup_llm(u, m, k, save=False))
         dialog.llm_save_requested.connect(lambda u, m, k: self._setup_llm(u, m, k, save=True))
         dialog.finished.connect(self._setup_finished)
+        dialog.closed.connect(self._setup_closed)
         dialog.open_url_requested.connect(self._open_url)
         dialog.client_find_requested.connect(self._find_client_file)
         dialog.client_file_chosen.connect(lambda path: self._install_client(Path(path)))
@@ -735,6 +736,11 @@ class DesktopApp(QObject):
             self.setup.show_page(DONE)
 
         self._background(client.check, done)
+
+    def _setup_closed(self) -> None:
+        """Закрыли крестиком: больше не открываться само, вернуть можно из меню."""
+        self._state.set("onboarding_done", True)
+        self.setup.hide()
 
     def _setup_finished(self) -> None:
         self._state.set("onboarding_done", True)
