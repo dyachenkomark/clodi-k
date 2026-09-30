@@ -8,3 +8,7 @@ dist/
 *.spec
 *.egg-info/
 .clodick-dev/
+
+# Ключ сервисного аккаунта Google: секрет, в репозиторий не кладём
+google-key.json
+*-key.json

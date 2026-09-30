@@ -93,8 +93,7 @@ def test_one_off_task_disappears_the_day_after_it_is_done(config, repo):
 
     clock.now = datetime(2026, 9, 28, 12)
     assert key not in [i.category.key for i in tracker.status().items]
-    with pytest.raises(KeyError):
-        tracker.mark_done(key)
+    assert tracker.mark_done(key) is False  # уже закрыта: второй раз не засчитывается
 
 
 def test_daily_task_repeats_and_goes_before_one_off(config, repo):

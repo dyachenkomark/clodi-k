@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,20 @@ roam = 500
 theme = "claude"
 # Персонаж. Свои персонажи кладите в папку characters рядом с этим файлом.
 character = "raccoon"
+
+[sheets]
+# Google Таблица как база: задачи, отметки, заметки. Как подключить — docs/SHEETS.md.
+# spreadsheet_id — адрес таблицы или её id из адреса. Пусто — работаем только локально.
+spreadsheet_id = ""
+# JSON-ключ сервисного аккаунта Google. Путь относительно папки с этим файлом.
+key_file = "google-key.json"
+# Как часто сверяться с таблицей, секунды.
+sync_seconds = 60
+
+# Проекты для задач и их короткие имена: «мага: отчёт до пт» попадёт в проект Maga.
+# [projects]
+# Work = ["работа", "work"]
+# Personal = ["личное"]
 
 [pomodoro]
 # Pomodoro: минуты фокуса, короткого и длинного перерыва.
@@ -74,6 +89,17 @@ class DesktopConfig:
 
 
 @dataclass(frozen=True)
+class SheetsConfig:
+    spreadsheet_id: str = ""
+    key_file: str = "google-key.json"
+    sync_seconds: int = 60
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.spreadsheet_id)
+
+
+@dataclass(frozen=True)
 class Config:
     categories: tuple[Category, ...]
     day_start_hour: int = 4
@@ -81,6 +107,9 @@ class Config:
     reminders: tuple[str, ...] = field(default_factory=tuple)
     desktop: DesktopConfig = field(default_factory=DesktopConfig)
     pomodoro: PomodoroConfig = field(default_factory=PomodoroConfig)
+    sheets: SheetsConfig = field(default_factory=SheetsConfig)
+    # Проект → его короткие имена для быстрого ввода.
+    projects: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def load_config(path: Path) -> Config:
@@ -128,7 +157,37 @@ def parse_config(raw: dict) -> Config:
         reminders=reminders,
         desktop=_parse_desktop(raw.get("desktop", {})),
         pomodoro=_parse_pomodoro(raw.get("pomodoro", {})),
+        sheets=_parse_sheets(raw.get("sheets", {})),
+        projects=_parse_projects(raw.get("projects", {})),
     )
+
+
+def _parse_sheets(raw: dict) -> SheetsConfig:
+    spreadsheet = raw.get("spreadsheet_id", "")
+    key_file = raw.get("key_file", "google-key.json")
+    seconds = raw.get("sync_seconds", 60)
+    if not isinstance(spreadsheet, str) or not isinstance(key_file, str) or not key_file:
+        raise ConfigError("sheets.spreadsheet_id и sheets.key_file должны быть строками")
+    if not isinstance(seconds, int) or not 15 <= seconds <= 3600:
+        raise ConfigError("sheets.sync_seconds должен быть целым числом от 15 до 3600")
+    # Можно вставить адрес таблицы целиком: id стоит между /d/ и следующим слэшем.
+    found = re.search(r"/d/([A-Za-z0-9_-]+)", spreadsheet)
+    return SheetsConfig(
+        spreadsheet_id=found[1] if found else spreadsheet.strip(),
+        key_file=key_file,
+        sync_seconds=seconds,
+    )
+
+
+def _parse_projects(raw: dict) -> dict[str, tuple[str, ...]]:
+    projects = {}
+    for name, aliases in raw.items():
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+            raise ConfigError(f"projects.{name}: нужен список коротких имён в кавычках")
+        projects[name] = tuple(aliases)
+    return projects
 
 
 def _parse_pomodoro(raw: dict) -> PomodoroConfig:

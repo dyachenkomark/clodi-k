@@ -32,13 +32,31 @@ def run(config: Config, tracker: Tracker, state: StateStore) -> int:
         return 1
 
     sys.excepthook = _log_exception
-    desktop = DesktopApp(app, config, tracker, state, ram_reader=ram_percent)
+    sync = make_sync(config)
+    desktop = DesktopApp(app, config, tracker, state, ram_reader=ram_percent, sync=sync)
     desktop.start()
+    if sync is not None:
+        sync.start()
     log.info("окно запущено")
     try:
         return app.exec()
     finally:
         lock.unlock()
+
+
+def make_sync(config: Config):
+    """Фоновая синхронизация с Google Таблицей, если она настроена."""
+    if not config.sheets.enabled:
+        return None
+    from clodick.sync.google import GoogleSheetClient
+    from clodick.sync.worker import SheetSync
+
+    key_file = paths.data_dir() / config.sheets.key_file
+    return SheetSync(
+        paths.db_path(),
+        lambda: GoogleSheetClient(key_file, config.sheets.spreadsheet_id),
+        period=config.sheets.sync_seconds,
+    )
 
 
 def _log_exception(exc_type, exc, tb) -> None:

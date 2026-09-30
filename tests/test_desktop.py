@@ -33,7 +33,7 @@ class Clock:
 @pytest.fixture
 def make_desktop(qapp, config, repo):
     created = []
-    state = StateStore(repo._conn)
+    state = StateStore(repo.conn)
 
     def factory(clock=None, theme="classic"):
         clock = clock or Clock(datetime(2026, 9, 26, 9, 0))
@@ -254,7 +254,7 @@ class FakeCursor:
 
 @pytest.fixture
 def playful_desktop(qapp, config, repo):
-    state = StateStore(repo._conn)
+    state = StateStore(repo.conn)
     cursor = FakeCursor()
     desktop = DesktopApp(
         qapp,
@@ -625,3 +625,94 @@ def test_penguin_slides_sideways_in_every_direction(playful_desktop, dx, dy, fli
     desktop.brain._walk_to(desktop.brain.x + dx, desktop.brain.y + dy)
     desktop._after_brain_change()
     assert desktop._shown_anim == ("walk", flip)
+
+
+def test_checklist_shows_deadlines_and_soon_section(make_desktop):
+    desktop, tracker, _ = make_desktop()  # 26.09.2026, суббота
+    desktop.open_checklist()
+    assert desktop.checklist.section_label is None
+
+    for text in ("maga: report by 29.09 15:00", "pay rent by 20.09", "buy milk"):
+        desktop.checklist.new_task.setText(text)
+        desktop.checklist.new_task.returnPressed.emit()
+
+    status = tracker.status()
+    assert [i.category.title for i in status.items][3:] == ["pay rent", "buy milk"]
+    assert [i.category.title for i in status.upcoming] == ["report"]
+    report, rent = status.upcoming[0].category.key, status.items[3].category.key
+    labels = desktop.checklist.meta_labels
+    assert labels[report].text() == "maga · Tue 29 Sep · 15:00"
+    assert labels[rent].text() == "overdue 6d"
+    assert labels[rent].objectName() == "metalate"
+    assert desktop.checklist.section_label.text() == "SOON"
+    assert desktop.checklist._progress.text() == "0/5"
+
+    desktop.checklist.boxes[report].setChecked(True)
+    assert tracker.status().upcoming[0].done
+
+
+def test_timed_task_reminds_once_when_its_time_comes(make_desktop):
+    desktop, tracker, clock = make_desktop()
+    tracker.add_from_text("call Anna today 09:30")
+    desktop.check_reminders_now()
+    assert not desktop.bubble.isVisible()
+
+    clock.now = datetime(2026, 9, 26, 9, 30, 10)
+    desktop.check_reminders_now()
+    assert desktop.bubble.text == "It's time: call Anna."
+    desktop.bubble.hide()
+    clock.now = datetime(2026, 9, 26, 9, 31)
+    desktop.check_reminders_now()
+    assert not desktop.bubble.isVisible()
+
+
+class FakeSync:
+    """Вместо фоновой синхронизации: считает запросы и отдаёт «пришли изменения»."""
+
+    status = "Sheet synced 09:00"
+
+    def __init__(self):
+        self.requests = 0
+        self.incoming = False
+        self.stopped = False
+
+    def request(self):
+        self.requests += 1
+
+    def pop_changed(self):
+        incoming, self.incoming = self.incoming, False
+        return incoming
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_local_changes_ask_for_sync_and_sheet_changes_refresh_checklist(qapp, config, repo):
+    sync = FakeSync()
+    tracker = Tracker(config, repo)
+    desktop = DesktopApp(
+        qapp, config, tracker, StateStore(repo.conn), ram_reader=lambda: 42, sync=sync
+    )
+    desktop.start()
+    try:
+        desktop.open_checklist()
+        desktop.checklist.boxes["sport"].setChecked(True)
+        assert sync.requests == 1
+        desktop.checklist.new_task.setText("buy milk")
+        desktop.checklist.new_task.returnPressed.emit()
+        assert sync.requests == 2
+
+        # С телефона в таблицу дописали задачу, фоновая синхронизация положила её в кэш.
+        tracker.add_task("From the phone")
+        sync.incoming = True
+        desktop._tick()
+        titles = [box.text() for box in desktop.checklist.boxes.values()]
+        assert "From the phone" in titles
+        if desktop.tray is not None:
+            desktop._update_tooltip()
+            assert "Sheet synced 09:00" in desktop.tray.toolTip()
+    finally:
+        for window in (desktop.pet, desktop.bubble, desktop.checklist):
+            window.close()
+            window.deleteLater()
+        qapp.processEvents()

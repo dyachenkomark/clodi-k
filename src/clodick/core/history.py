@@ -22,7 +22,10 @@ def history(repo: CompletionRepository, config: Config, first: date, last: date)
     что-то было в этот день."""
     done = {(d, key): at for d, key, at in repo.completions_between(first, last)}
     notes: dict[tuple[date, str], list] = {}
-    titles = {cat.key: cat.title for cat in config.categories} | repo.task_titles()
+    # Название пункта: из настроек, из задач, а для удалённых задач — из самих записей.
+    titles = repo.completion_titles()
+    titles |= {task.key: task.title for task in repo.tasks()}
+    titles |= {cat.key: cat.title for cat in config.categories}
     for note in repo.notes_between(first, last):
         notes.setdefault((note.day, note.key), []).append(note)
         titles.setdefault(note.key, note.title)

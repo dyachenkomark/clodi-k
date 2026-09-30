@@ -383,6 +383,9 @@ QToolButton#note {{
 }}
 QToolButton#note:hover {{ color: {t.accent}; }}
 QLabel#notetext {{ color: {t.muted}; font-size: 12px; }}
+QLabel#meta {{ color: {t.muted}; font-size: 11px; }}
+QLabel#metalate {{ color: {t.accent}; font-size: 11px; font-weight: 600; }}
+QLabel#section {{ color: {t.muted}; font-size: 11px; font-weight: 700; padding-top: 4px; }}
 QToolButton#notedel {{
     color: {t.muted}; background: transparent; border: none; font-size: 14px; padding: 0;
 }}
@@ -391,6 +394,28 @@ QToolButton#notedel:hover {{ color: {t.text}; }}
 
 
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def meta_text(category, day) -> tuple[str, bool]:
+    """Подпись задачи: проект, срок, время. Второе значение — просрочена ли."""
+    parts = [category.project] if category.project else []
+    late = False
+    due = category.due
+    if due is not None:
+        delta = (due - day).days
+        if delta < 0:
+            late = True
+            parts.append(f"overdue {-delta}d")
+        elif delta == 0:
+            parts.append("today")
+        elif delta == 1:
+            parts.append("tomorrow")
+        else:
+            parts.append(f"{WEEKDAYS[due.weekday()]} {due.day} {MONTHS[due.month - 1]}")
+    if category.time:
+        parts.append(category.time)
+    return " · ".join(parts), late
 
 
 class ChecklistPopup(QWidget):
@@ -437,7 +462,10 @@ class ChecklistPopup(QWidget):
         self._items = QVBoxLayout()
         self._items.setSpacing(2)
 
-        self.new_task = QLineEdit(placeholderText="Add a task…")
+        self.new_task = QLineEdit(placeholderText="Add a task…  maga: report by fri 15:00")
+        self.new_task.setToolTip(
+            "project: title, then a deadline — by fri, tomorrow, 02.10, in 3 days — and a time"
+        )
         self.new_task.returnPressed.connect(self._submit)
         self.new_task_daily = QCheckBox("daily", objectName="daily")
         self.new_task_daily.setToolTip("Repeat every day")
@@ -476,6 +504,8 @@ class ChecklistPopup(QWidget):
         self.note_labels: dict[str, list[QLabel]] = {}
         self.note_delete_buttons: dict[int, QToolButton] = {}
         self._signature: list = []
+        self.meta_labels: dict[str, QLabel] = {}
+        self.section_label: QLabel | None = None
         self.setMinimumWidth(240)
 
     @property
@@ -491,11 +521,21 @@ class ChecklistPopup(QWidget):
     def set_status(self, status: DayStatus, ram: int | None, focus_today: int = 0) -> None:
         self._title.setText(f"Today, {MONTHS[status.day.month - 1]} {status.day.day}")
         self._progress.setText(f"{status.done_count}/{status.total}")
-        signature = [(i.category.key, tuple(n.id for n in i.notes)) for i in status.items]
+        signature = [
+            (
+                i.category.key,
+                i.category.title,
+                meta_text(i.category, status.day),
+                section,
+                *(n.id for n in i.notes),
+            )
+            for section, items in enumerate((status.items, status.upcoming))
+            for i in items
+        ]
         if signature != self._signature:
             self._signature = signature
             self._rebuild(status)
-        for item in status.items:
+        for item in (*status.items, *status.upcoming):
             box = self._boxes[item.category.key]
             box.blockSignals(True)
             box.setChecked(item.done)
@@ -563,42 +603,60 @@ class ChecklistPopup(QWidget):
         self.note_editors = {}
         self.note_labels = {}
         self.note_delete_buttons = {}
+        self.meta_labels = {}
+        self.section_label = None
         for item in status.items:
-            key = item.category.key
-            row = QWidget()
-            column = QVBoxLayout(row)
-            column.setContentsMargins(0, 0, 0, 0)
-            column.setSpacing(1)
-            line = QHBoxLayout()
-            line.setContentsMargins(0, 0, 0, 0)
-            column.addLayout(line)
-            box = QCheckBox(item.category.title)
-            box.setCursor(Qt.CursorShape.PointingHandCursor)
-            box.toggled.connect(lambda checked, key=key: self.toggled.emit(key, checked))
-            line.addWidget(box, 1)
-            note = QToolButton(objectName="note", text="✎")
-            note.setToolTip("Add a note or result")
-            note.setCursor(Qt.CursorShape.PointingHandCursor)
-            note.clicked.connect(lambda _=False, key=key: self.ask_note(key))
-            line.addWidget(note)
-            self.note_buttons[key] = note
-            focus = QToolButton(objectName="focus", text="▶")
-            focus.setToolTip("Start a focus session on this")
-            focus.setCursor(Qt.CursorShape.PointingHandCursor)
-            focus.clicked.connect(lambda _=False, key=key: self.focus_requested.emit(key))
-            line.addWidget(focus)
-            self.focus_buttons[key] = focus
-            if item.category.custom:
-                remove = QToolButton(objectName="remove", text="×")
-                remove.setToolTip("Delete task")
-                remove.setCursor(Qt.CursorShape.PointingHandCursor)
-                remove.clicked.connect(lambda _=False, key=key: self.task_removed.emit(key))
-                line.addWidget(remove)
-                self.remove_buttons[key] = remove
-            self._add_notes(column, key, item.notes)
-            self._items.addWidget(row)
-            self._rows.append(row)
-            self._boxes[key] = box
+            self._add_row(item, status.day)
+        if status.upcoming:
+            self.section_label = QLabel("SOON", objectName="section")
+            self._items.addWidget(self.section_label)
+            self._rows.append(self.section_label)
+            for item in status.upcoming:
+                self._add_row(item, status.day)
+
+    def _add_row(self, item, day) -> None:
+        """Строка пункта: галочка, подпись со сроком, кнопки, под ней заметки."""
+        key = item.category.key
+        row = QWidget()
+        column = QVBoxLayout(row)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(1)
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        column.addLayout(line)
+        box = QCheckBox(item.category.title)
+        box.setCursor(Qt.CursorShape.PointingHandCursor)
+        box.toggled.connect(lambda checked, key=key: self.toggled.emit(key, checked))
+        line.addWidget(box, 1)
+        meta, late = meta_text(item.category, day)
+        if meta:
+            label = QLabel(meta, objectName="metalate" if late else "meta")
+            label.setContentsMargins(8, 0, 2, 0)
+            line.addWidget(label)
+            self.meta_labels[key] = label
+        note = QToolButton(objectName="note", text="✎")
+        note.setToolTip("Add a note or result")
+        note.setCursor(Qt.CursorShape.PointingHandCursor)
+        note.clicked.connect(lambda _=False, key=key: self.ask_note(key))
+        line.addWidget(note)
+        self.note_buttons[key] = note
+        focus = QToolButton(objectName="focus", text="▶")
+        focus.setToolTip("Start a focus session on this")
+        focus.setCursor(Qt.CursorShape.PointingHandCursor)
+        focus.clicked.connect(lambda _=False, key=key: self.focus_requested.emit(key))
+        line.addWidget(focus)
+        self.focus_buttons[key] = focus
+        if item.category.custom:
+            remove = QToolButton(objectName="remove", text="×")
+            remove.setToolTip("Delete task")
+            remove.setCursor(Qt.CursorShape.PointingHandCursor)
+            remove.clicked.connect(lambda _=False, key=key: self.task_removed.emit(key))
+            line.addWidget(remove)
+            self.remove_buttons[key] = remove
+        self._add_notes(column, key, item.notes)
+        self._items.addWidget(row)
+        self._rows.append(row)
+        self._boxes[key] = box
 
     def _add_notes(self, column: QVBoxLayout, key: str, notes) -> None:
         """Заметки под пунктом и скрытое поле для новой."""

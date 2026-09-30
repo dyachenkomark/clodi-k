@@ -23,6 +23,7 @@ from clodick.core.reminders import (
     greeting_text,
     parse_times,
     reminder_text,
+    timed_text,
 )
 from clodick.core.tracker import Tracker
 from clodick.desktop.actions import ACTIONS, TASK_LINES, TASK_REACTION_POOL, TASK_REACTIONS
@@ -107,6 +108,7 @@ class DesktopApp(QObject):
         clock: Callable[[], datetime] = datetime.now,
         rng: random.Random | None = None,
         cursor: Callable[[], QPoint] = QCursor.pos,
+        sync=None,
     ) -> None:
         super().__init__()
         self._app = app
@@ -116,6 +118,8 @@ class DesktopApp(QObject):
         self._read_ram = ram_reader
         self._clock = clock
         self._cursor = cursor
+        # Фоновая синхронизация с Google Таблицей (sync.worker.SheetSync) или None.
+        self.sync = sync
         self._rng = rng or random.Random()
         self._scale = config.desktop.scale
         self._ram: int | None = None
@@ -212,6 +216,8 @@ class DesktopApp(QObject):
 
     def quit(self) -> None:
         self._save_position()
+        if self.sync is not None:
+            self.sync.stop()
         if self.tray is not None:
             self.tray.hide()
         self._app.quit()
@@ -278,6 +284,7 @@ class DesktopApp(QObject):
         if event is Event.FOCUS_DONE:
             minutes = self.pomodoro.config.focus
             self._tracker.add_focus(key, started, minutes)
+            self._data_changed()
             if key and self._tracker.title_of(key) is not None:
                 self._tracker.mark_done(key, source="focus")
             self.brain.set_walks(self._walks_wanted())
@@ -321,7 +328,19 @@ class DesktopApp(QObject):
             parts.append(focus)
         if self._ram is not None:
             parts.append(f"RAM {self._ram}%")
+        if self.sync is not None:
+            parts.append(self.sync.status)
         self.tray.setToolTip(" · ".join(parts))
+
+    def _data_changed(self) -> None:
+        """Данные поменялись локально: пора отправить их в таблицу."""
+        if self.sync is not None:
+            self.sync.request()
+
+    def sync_now(self) -> None:
+        if self.sync is not None:
+            self.sync.request()
+            self.say("Syncing with the sheet…", 3, wave=False)
 
     def set_reminders(self, on: bool) -> None:
         self._state.set("reminders_on", on)
@@ -407,20 +426,27 @@ class DesktopApp(QObject):
         status = self._tracker.status()
         self.checklist.set_status(status, self._ram, self._tracker.focus_count())
         log.info("%s %s через окно", "done" if checked else "undo", key)
+        self._data_changed()
         if checked and status.all_done:
             self.say(DONE_TEXT, seconds=6)
         if checked:
             # Сразу предложить записать результат. Не обязательно: можно просто закрыть.
             self.checklist.ask_note(key)
 
-    def _add_task(self, title: str, daily: bool) -> None:
-        task = self._tracker.add_task(title, daily)
-        log.info("своя задача %s: %s", "ежедневная" if daily else "разовая", task.id)
+    def _add_task(self, text: str, daily: bool) -> None:
+        """Задача из строки чек-листа: «мага: отчёт до пт в 15:00»."""
+        try:
+            task = self._tracker.add_from_text(text, daily)
+        except ValueError:
+            return  # в строке были только срок или проект, названия нет
+        log.info("задача %s: проект %r, срок %s", task.id, task.project, task.due)
+        self._data_changed()
         self._refresh_checklist()
 
     def _remove_task(self, key: str) -> None:
         if self._tracker.remove_task(key):
             log.info("задача удалена: %s", key)
+        self._data_changed()
         self._refresh_checklist()
 
     def _refresh_checklist(self) -> None:
@@ -435,6 +461,7 @@ class DesktopApp(QObject):
             log.exception("заметка не сохранилась")
             return
         log.info("заметка к %s", key)
+        self._data_changed()
         self._refresh_checklist()
         if self._rng.random() < REACTION_LINE_CHANCE:
             self.chat(self._rng.choice(("Noted!", "Written down.", "Nice result!")), 3)
@@ -442,6 +469,7 @@ class DesktopApp(QObject):
     def _delete_note(self, note_id: int) -> None:
         if self._tracker.delete_note(note_id):
             log.info("заметка удалена: %s", note_id)
+        self._data_changed()
         self._refresh_checklist()
 
     def _reanchor_checklist(self) -> None:
@@ -472,12 +500,29 @@ class DesktopApp(QObject):
         due = self._reminder_clock.check(self._clock())
         if self.pomodoro.phase is Phase.FOCUS:
             return  # во время фокуса енот молчит
-        if not (due and self._reminders_on):
+        if not self._reminders_on:
+            return
+        if self._check_timed():
+            return
+        if not due:
             return
         text = reminder_text(self._tracker.status())
         if text:
             log.info("напоминание: %s", text)
             self.say(text)
+
+    def _check_timed(self) -> bool:
+        """Задачи со временем, которое наступило. О каждой напоминаем один раз в день."""
+        day = self._tracker.today().isoformat()
+        seen = set((self._state.get("timed_reminded") or {}).get(day, []))
+        now_due = self._tracker.due_now(seen)
+        if not now_due:
+            return False
+        self._state.set("timed_reminded", {day: sorted(seen | {c.key for c in now_due})})
+        text = timed_text([c.title for c in now_due])
+        log.info("напоминание по времени: %s", text)
+        self.say(text)
+        return True
 
     def _pet_double_clicked(self) -> None:
         """Двойной клик: енот пугается и убегает, потом возвращается на место."""
@@ -508,6 +553,11 @@ class DesktopApp(QObject):
         self.brain.tick(min(dt, 2.0))
         self._after_brain_change()
         self._after_tick(now)
+        if self.sync is not None and self.sync.pop_changed():
+            # Из таблицы пришли правки: показать их, если чек-лист открыт.
+            log.info("из таблицы пришли изменения")
+            if self.checklist.isVisible():
+                self._refresh_checklist()
 
     def _after_tick(self, now: float) -> None:
         """Реплика к только что начатому действию и болтовня по расписанию."""
@@ -830,6 +880,8 @@ class DesktopApp(QObject):
         menu.addAction("Today's checklist", self.open_checklist)
         menu.addAction("Bring raccoon here", self.summon)
         menu.addAction("Climb the edge", self.climb_now)
+        if self.sync is not None:
+            menu.addAction("Sync with the sheet now", self.sync_now)
         menu.addAction("Start focus", lambda: self.start_focus())
         self._stop_focus_action = menu.addAction("Stop focus", self.stop_focus)
         self._stop_focus_action.setEnabled(self.pomodoro.active)

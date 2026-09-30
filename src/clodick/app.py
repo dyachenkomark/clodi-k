@@ -7,6 +7,9 @@ clodick undo sport   снять отметку
 clodick note sport "5 км за 28 минут"   заметка к пункту: результат, комментарий
 clodick notes --days 7                  заметки за последние дни
 clodick export history.csv              выгрузить историю: .csv для таблицы, .json для LLM
+clodick add "мага: отчёт до пт 15:00"   задача с проектом, сроком и временем
+clodick tasks                           открытые задачи по срокам
+clodick sync                            сверить кэш с Google Таблицей сейчас
 """
 
 from __future__ import annotations
@@ -44,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     note.add_argument("text", nargs="+")
     notes = sub.add_parser("notes", help="show notes of the last days")
     notes.add_argument("--days", type=int, default=7)
+    add = sub.add_parser("add", help='add a task: "maga: report by fri 15:00"')
+    add.add_argument("text", nargs="+")
+    add.add_argument("--daily", action="store_true", help="repeat every day")
+    sub.add_parser("tasks", help="list open tasks by deadline")
+    sub.add_parser("sync", help="sync with the Google Sheet now")
     export = sub.add_parser("export", help="export history to .csv or .json")
     export.add_argument("path", type=Path)
     export.add_argument("--from", dest="first", type=date.fromisoformat, default=None)
@@ -85,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
             return _print_notes(repo, tracker.today(), args.days)
         if args.command == "export":
             return _export(args, repo, config, tracker.today())
+        if args.command == "tasks":
+            return _print_tasks(tracker)
+        if args.command == "sync":
+            return _sync(repo, config)
         return _run_cli(args, tracker)
     finally:
         conn.close()
@@ -100,6 +112,11 @@ def _run_cli(args: argparse.Namespace, tracker: Tracker) -> int:
             if not tracker.unmark(args.key):
                 print("It was not marked.")
             log.info("undo %s", args.key)
+        elif args.command == "add":
+            task = tracker.add_from_text(" ".join(args.text), args.daily)
+            print(f"Added: {_task_line(task)}")
+            log.info("add %s", task.id)
+            return 0
         elif args.command == "note":
             tracker.add_note(args.key, " ".join(args.text), source="cli")
             log.info("note %s", args.key)
@@ -116,6 +133,50 @@ def _print_notes(repo: CompletionRepository, today: date, days: int) -> int:
         print("No notes yet.")
     for note in notes:
         print(f"{note.day:%d.%m} {note.title}: {note.text}")
+    return 0
+
+
+def _task_line(task) -> str:
+    parts = [task.key.ljust(14)]
+    parts.append(f"{task.due:%d.%m.%Y}" if task.due else "no date   ")
+    parts.append(task.time or "     ")
+    if task.project:
+        parts.append(f"[{task.project}]")
+    parts.append(task.title)
+    return " ".join(parts)
+
+
+def _print_tasks(tracker: Tracker) -> int:
+    tasks = tracker.open_tasks()
+    if not tasks:
+        print("No open tasks.")
+    for task in tasks:
+        print(_task_line(task))
+    return 0
+
+
+def _sync(repo: CompletionRepository, config) -> int:
+    """Разовая синхронизация с таблицей. Удобно проверить настройку: ошибки видны сразу."""
+    if not config.sheets.enabled:
+        print("Google Sheet is not set up: fill [sheets] in config.toml. See docs/SHEETS.md.")
+        return 2
+    from datetime import datetime
+
+    from clodick.sync.google import GoogleSheetClient, SheetsError
+    from clodick.sync.tables import sync_all
+
+    try:
+        client = GoogleSheetClient(
+            paths.data_dir() / config.sheets.key_file, config.sheets.spreadsheet_id
+        )
+        report = sync_all(repo, client, datetime.now())
+    except SheetsError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    except Exception as exc:  # сеть, лимиты Google
+        print(f"Sync failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Synced as {client.account}: {report.pulled} rows in, {report.pushed} rows out.")
     return 0
 
 

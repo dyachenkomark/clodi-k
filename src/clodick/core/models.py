@@ -14,30 +14,47 @@ class Category:
     title: str
     url: str | None = None
     daily: bool = True
-    # Своя задача: добавлена из чек-листа, её можно удалить.
+    # Своя задача: добавлена из чек-листа или таблицы, её можно удалить.
     custom: bool = False
+    # У своих задач: проект (Turkov, Maga, …), срок и время напоминания "ЧЧ:ММ".
+    project: str = ""
+    due: date | None = None
+    time: str = ""
 
 
 TASK_PREFIX = "task:"
 
 
-def task_key(task_id: int) -> str:
+def task_key(task_id: str) -> str:
     return f"{TASK_PREFIX}{task_id}"
 
 
-def task_id(key: str) -> int | None:
-    """task:7 → 7. Для направлений из настроек — None."""
+def task_id(key: str) -> str | None:
+    """task:a1b2c3d4 → a1b2c3d4. Для направлений из настроек — None."""
     if not key.startswith(TASK_PREFIX):
         return None
-    rest = key.removeprefix(TASK_PREFIX)
-    return int(rest) if rest.isdigit() else None
+    return key.removeprefix(TASK_PREFIX) or None
 
 
 @dataclass(frozen=True)
 class Task:
-    id: int
+    """Своя задача. Ежедневная отмечается по дням, разовая закрывается один раз."""
+
+    id: str
     title: str
-    daily: bool
+    daily: bool = False
+    project: str = ""
+    due: date | None = None
+    time: str = ""
+    # Только для разовых: закрыта и когда.
+    done: bool = False
+    done_at: datetime | None = None
+    note: str = ""
+    created_at: datetime | None = None
+
+    @property
+    def key(self) -> str:
+        return task_key(self.id)
 
 
 @dataclass(frozen=True)
@@ -63,7 +80,10 @@ class CategoryStatus:
 @dataclass(frozen=True)
 class DayStatus:
     day: date
+    # Сегодняшнее: направления, ежедневные задачи, разовые без срока, на сегодня и просроченные.
     items: tuple[CategoryStatus, ...]
+    # Скоро: разовые задачи со сроком в ближайшие дни.
+    upcoming: tuple[CategoryStatus, ...] = ()
 
     @property
     def done_count(self) -> int:
