@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, QSize, QTimer
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCursor, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from clodick import paths
+from clodick import llm, paths
 from clodick.characters import DEFAULT_CHARACTER, Character, builtin_dir, discover
 from clodick.config import Config
 from clodick.core.chatter import idle_line
@@ -42,10 +45,12 @@ from clodick.desktop.brain import (
     Brain,
     Mode,
 )
+from clodick.desktop.onboarding import DONE, HELLO, SetupDialog
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import BOTTOM_PAD, BubbleWindow, ChecklistPopup, PetWindow
 from clodick.storage.state import StateStore
+from clodick.sync import google
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +101,32 @@ BELLY_MODES = (Mode.SIT, Mode.WAVE)
 RAM_COLOR = "#e8792b"
 
 
+@dataclass
+class SetupEnv:
+    """Всё, что мастеру нужно снаружи. В тестах подменяется, чтобы не ходить в сеть."""
+
+    data_dir: Path
+    oauth_client: Path | None
+    sign_in: Callable = google.sign_in
+    find_or_create: Callable = google.find_or_create_sheet
+    authorize: Callable = google.authorize
+    open_link: Callable = google.open_by_link
+    llm_client: Callable = llm.LLMClient
+    load_key: Callable = llm.load_key
+    save_key: Callable = llm.save_key
+
+    @classmethod
+    def default(cls) -> SetupEnv:
+        data_dir = paths.data_dir()
+        return cls(data_dir, google.oauth_client_file(data_dir))
+
+
+class _Job(QObject):
+    """Результат фоновой работы: приходит в поток интерфейса очередью Qt."""
+
+    done = Signal(object, object)
+
+
 class DesktopApp(QObject):
     def __init__(
         self,
@@ -109,6 +140,8 @@ class DesktopApp(QObject):
         rng: random.Random | None = None,
         cursor: Callable[[], QPoint] = QCursor.pos,
         sync=None,
+        sync_factory: Callable | None = None,
+        setup_env: SetupEnv | None = None,
     ) -> None:
         super().__init__()
         self._app = app
@@ -120,6 +153,14 @@ class DesktopApp(QObject):
         self._cursor = cursor
         # Фоновая синхронизация с Google Таблицей (sync.worker.SheetSync) или None.
         self.sync = sync
+        # Как запустить синхронизацию, когда таблицу подключили в мастере: link → SheetSync.
+        self._sync_factory = sync_factory
+        self._env = setup_env or SetupEnv.default()
+        self.setup: SetupDialog | None = None
+        self._jobs: set[_Job] = set()
+        # Тесты ставят True: фоновая работа выполняется сразу, без потоков.
+        self.inline_jobs = False
+        self._llm = self._load_llm(state)
         self._rng = rng or random.Random()
         self._scale = config.desktop.scale
         self._ram: int | None = None
@@ -212,7 +253,9 @@ class DesktopApp(QObject):
         if self._playful:
             self._cursor_timer.start()
         self._pomodoro_changed(save=False)
-        QTimer.singleShot(GREETING_DELAY_MS, self._greet)
+        # Первый запуск: вместо приветствия персонаж знакомится и помогает настроиться.
+        first_run = not self._state.get("onboarding_done", False)
+        QTimer.singleShot(GREETING_DELAY_MS, self.open_setup if first_run else self._greet)
 
     def quit(self) -> None:
         self._save_position()
@@ -492,9 +535,172 @@ class DesktopApp(QObject):
     def _greet(self) -> None:
         if not self._reminders_on or self.pomodoro.phase is Phase.FOCUS:
             return
+        if self._llm is not None:
+            self.plan_my_day(quiet=True)
+            return
         text = greeting_text(self._tracker.status())
         if text:
             self.say(text, seconds=8)
+
+    # --- модель для анализа ---
+
+    def _load_llm(self, state: StateStore):
+        settings = llm.LLMSettings.from_dict(state.get("llm"))
+        if settings is None:
+            return None
+        return self._env.llm_client(settings, self._env.load_key())
+
+    def plan_my_day(self, quiet: bool = False) -> None:
+        """План на день от модели по задачам и заметкам. Факты собирает код."""
+        if self._llm is None:
+            self.say("Connect an AI model in Setup and I'll plan your day.", 6, wave=False)
+            return
+        status, tasks = self._tracker.status(), self._tracker.open_tasks()
+        now_text = self._clock().strftime("%A %d %B %Y, %H:%M")
+        client = self._llm
+
+        def done(text, error) -> None:
+            if error is not None:
+                log.warning("модель не ответила: %s", error)
+                if quiet:
+                    fallback = greeting_text(status)
+                    if fallback:
+                        self.say(fallback, seconds=8)
+                else:
+                    self.say(f"I couldn't reach the model: {error}", 8, wave=False)
+                return
+            if text:
+                self.say(text, seconds=max(10, min(30, len(text) / 12)))
+
+        if not quiet:
+            self.say("Let me think…", 4, wave=False)
+        self._background(lambda: llm.plan_day(client, status, tasks, now_text), done)
+
+    # --- мастер настройки ---
+
+    def _background(self, work: Callable, on_done: Callable) -> None:
+        """work() в отдельном потоке, on_done(результат, ошибка) — в потоке интерфейса."""
+        if self.inline_jobs:
+            try:
+                result, error = work(), None
+            except Exception as exc:
+                result, error = None, exc
+            on_done(result, error)
+            return
+        job = _Job()
+        self._jobs.add(job)
+
+        def finish(result, error) -> None:
+            self._jobs.discard(job)
+            on_done(result, error)
+
+        job.done.connect(finish, Qt.ConnectionType.QueuedConnection)
+
+        def run() -> None:
+            try:
+                job.done.emit(work(), None)
+            except Exception as exc:  # показать человеку, а не уронить поток
+                job.done.emit(None, exc)
+
+        threading.Thread(target=run, name="clodick-job", daemon=True).start()
+
+    def open_setup(self) -> None:
+        if self.setup is None:
+            self.setup = self._build_setup()
+        self.checklist.hide()
+        self.bubble.hide()
+        self.setup.show_page(HELLO)
+        self.setup.open_near(self.pet.geometry(), self._screen_rect())
+
+    def _build_setup(self) -> SetupDialog:
+        dialog = SetupDialog(self.theme)
+        choices = []
+        for character in sorted(self.characters.values(), key=lambda c: c.name):
+            book = SpriteBook(2, character=character, theme=self.theme.key)
+            choices.append((character.id, character.name, book.character_frame("sit", 0)))
+        dialog.set_characters(choices, self.character.id)
+        dialog.set_google_available(self._env.oauth_client is not None)
+        current = llm.LLMSettings.from_dict(self._state.get("llm"))
+        if current is not None:
+            dialog.set_llm_fields(current.base_url, current.model, bool(self._env.load_key()))
+        link = google.SheetLink.from_dict(self._state.get("sheet_link"))
+        if link is not None:
+            dialog.set_sheet_status("The sheet is connected.", True, link.url)
+        dialog.character_chosen.connect(self.set_character)
+        dialog.google_requested.connect(self._setup_google)
+        dialog.service_requested.connect(self._setup_service)
+        dialog.llm_check_requested.connect(lambda u, m, k: self._setup_llm(u, m, k, save=False))
+        dialog.llm_save_requested.connect(lambda u, m, k: self._setup_llm(u, m, k, save=True))
+        dialog.finished.connect(self._setup_finished)
+        return dialog
+
+    def _setup_google(self) -> None:
+        env = self._env
+        token = env.data_dir / google.TOKEN_NAME
+
+        def work():
+            gc = env.sign_in(env.oauth_client, token)
+            sheet_id, url = env.find_or_create(gc)
+            return google.SheetLink("oauth", sheet_id, str(token), url)
+
+        self._background(work, self._sheet_linked)
+
+    def _setup_service(self, key_file: str, sheet: str) -> None:
+        env = self._env
+
+        def work():
+            gc = env.authorize(google.SheetLink("service", "-", key_file))
+            sheet_id, url = env.open_link(gc, sheet)
+            return google.SheetLink("service", sheet_id, key_file, url)
+
+        self._background(work, self._sheet_linked)
+
+    def _sheet_linked(self, link, error) -> None:
+        if error is not None:
+            log.warning("таблица не подключилась: %s", error)
+            self.setup.set_sheet_status(f"Didn't work: {error}", False)
+            return
+        self.connect_sheet(link)
+        self.setup.set_sheet_status("Connected! Your tasks now live in the sheet.", True, link.url)
+
+    def connect_sheet(self, link) -> None:
+        """Запомнить таблицу и сразу начать с ней сверяться, без перезапуска."""
+        self._state.set("sheet_link", link.to_dict())
+        if self.sync is not None:
+            self.sync.stop()
+        self.sync = self._sync_factory(link) if self._sync_factory else None
+        if self.sync is not None:
+            self.sync.start()
+            self.sync.request()
+        self._sync_action.setEnabled(self.sync is not None)
+        log.info("таблица подключена: %s (%s)", link.spreadsheet_id, link.mode)
+
+    def _setup_llm(self, url: str, model: str, key: str, *, save: bool) -> None:
+        settings = llm.LLMSettings(llm.normalize_url(url), model.strip())
+        key = key.strip() or self._env.load_key()
+        client = self._env.llm_client(settings, key)
+
+        def done(answer, error) -> None:
+            if error is not None:
+                self.setup.set_llm_status(f"Didn't work: {error}", False)
+                return
+            if not save:
+                self.setup.set_llm_status(f"The model answered: {answer[:60]}", True)
+                return
+            if key:
+                self._env.save_key(key)
+            self._state.set("llm", settings.to_dict())
+            self._llm = client
+            log.info("модель подключена: %s %s", settings.base_url, settings.model)
+            self.setup.set_llm_status("Saved. I'll use it for plans.", True)
+            self.setup.show_page(DONE)
+
+        self._background(client.check, done)
+
+    def _setup_finished(self) -> None:
+        self._state.set("onboarding_done", True)
+        self.setup.hide()
+        self.say("Nice to meet you! Click me whenever you need today's list.", 8)
 
     def _check_reminders(self) -> None:
         due = self._reminder_clock.check(self._clock())
@@ -880,8 +1086,10 @@ class DesktopApp(QObject):
         menu.addAction("Today's checklist", self.open_checklist)
         menu.addAction("Bring raccoon here", self.summon)
         menu.addAction("Climb the edge", self.climb_now)
-        if self.sync is not None:
-            menu.addAction("Sync with the sheet now", self.sync_now)
+        self._sync_action = menu.addAction("Sync with the sheet now", self.sync_now)
+        self._sync_action.setEnabled(self.sync is not None)
+        menu.addAction("Plan my day", self.plan_my_day)
+        menu.addAction("Setup…", self.open_setup)
         menu.addAction("Start focus", lambda: self.start_focus())
         self._stop_focus_action = menu.addAction("Stop focus", self.stop_focus)
         self._stop_focus_action.setEnabled(self.pomodoro.active)

@@ -85,11 +85,11 @@ def test_worker_survives_errors_and_recovers(db, monkeypatch):
 
 def test_google_client_explains_key_problems(tmp_path):
     with pytest.raises(SheetsError, match="Key file not found"):
-        GoogleSheetClient(tmp_path / "missing.json", "abc")
+        GoogleSheetClient.service_account(tmp_path / "missing.json", "abc")
     junk = tmp_path / "junk.json"
     junk.write_text('{"hello": 1}', encoding="utf-8")
     with pytest.raises(SheetsError, match="not a service account key"):
-        GoogleSheetClient(junk, "abc")
+        GoogleSheetClient.service_account(junk, "abc")
 
 
 def test_column_letters():

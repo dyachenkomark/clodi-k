@@ -12,3 +12,5 @@ dist/
 # Ключ сервисного аккаунта Google: секрет, в репозиторий не кладём
 google-key.json
 *-key.json
+google-oauth-client.json
+google-token.json

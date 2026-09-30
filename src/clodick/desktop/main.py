@@ -32,8 +32,12 @@ def run(config: Config, tracker: Tracker, state: StateStore) -> int:
         return 1
 
     sys.excepthook = _log_exception
-    sync = make_sync(config)
-    desktop = DesktopApp(app, config, tracker, state, ram_reader=ram_percent, sync=sync)
+    sync_factory = make_sync_factory(config)
+    link = current_link(config, state)
+    sync = sync_factory(link) if link is not None else None
+    desktop = DesktopApp(
+        app, config, tracker, state, ram_reader=ram_percent, sync=sync, sync_factory=sync_factory
+    )
     desktop.start()
     if sync is not None:
         sync.start()
@@ -44,19 +48,33 @@ def run(config: Config, tracker: Tracker, state: StateStore) -> int:
         lock.unlock()
 
 
-def make_sync(config: Config):
-    """Фоновая синхронизация с Google Таблицей, если она настроена."""
-    if not config.sheets.enabled:
-        return None
-    from clodick.sync.google import GoogleSheetClient
-    from clodick.sync.worker import SheetSync
+def current_link(config: Config, state: StateStore):
+    """Как ходить в таблицу: подключённая в мастере, иначе заданная в config.toml."""
+    from clodick.sync.google import SheetLink
 
-    key_file = paths.data_dir() / config.sheets.key_file
-    return SheetSync(
-        paths.db_path(),
-        lambda: GoogleSheetClient(key_file, config.sheets.spreadsheet_id),
-        period=config.sheets.sync_seconds,
-    )
+    link = SheetLink.from_dict(state.get("sheet_link"))
+    if link is not None:
+        return link
+    if config.sheets.enabled:
+        key_file = paths.data_dir() / config.sheets.key_file
+        return SheetLink("service", config.sheets.spreadsheet_id, str(key_file))
+    return None
+
+
+def make_sync_factory(config: Config):
+    """link → фоновая синхронизация с этой таблицей."""
+
+    def factory(link):
+        from clodick.sync.google import GoogleSheetClient
+        from clodick.sync.worker import SheetSync
+
+        return SheetSync(
+            paths.db_path(),
+            lambda: GoogleSheetClient.from_link(link),
+            period=config.sheets.sync_seconds,
+        )
+
+    return factory
 
 
 def _log_exception(exc_type, exc, tb) -> None:

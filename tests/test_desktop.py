@@ -34,6 +34,7 @@ class Clock:
 def make_desktop(qapp, config, repo):
     created = []
     state = StateStore(repo.conn)
+    state.set("onboarding_done", True)  # мастер первого запуска проверяется в test_onboarding
 
     def factory(clock=None, theme="classic"):
         clock = clock or Clock(datetime(2026, 9, 26, 9, 0))
@@ -255,6 +256,7 @@ class FakeCursor:
 @pytest.fixture
 def playful_desktop(qapp, config, repo):
     state = StateStore(repo.conn)
+    state.set("onboarding_done", True)
     cursor = FakeCursor()
     desktop = DesktopApp(
         qapp,
@@ -690,6 +692,7 @@ class FakeSync:
 def test_local_changes_ask_for_sync_and_sheet_changes_refresh_checklist(qapp, config, repo):
     sync = FakeSync()
     tracker = Tracker(config, repo)
+    StateStore(repo.conn).set("onboarding_done", True)
     desktop = DesktopApp(
         qapp, config, tracker, StateStore(repo.conn), ram_reader=lambda: 42, sync=sync
     )

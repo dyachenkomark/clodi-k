@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "tasks":
             return _print_tasks(tracker)
         if args.command == "sync":
-            return _sync(repo, config)
+            return _sync(repo, config, StateStore(conn))
         return _run_cli(args, tracker)
     finally:
         conn.close()
@@ -155,20 +155,20 @@ def _print_tasks(tracker: Tracker) -> int:
     return 0
 
 
-def _sync(repo: CompletionRepository, config) -> int:
+def _sync(repo: CompletionRepository, config, state: StateStore) -> int:
     """Разовая синхронизация с таблицей. Удобно проверить настройку: ошибки видны сразу."""
-    if not config.sheets.enabled:
-        print("Google Sheet is not set up: fill [sheets] in config.toml. See docs/SHEETS.md.")
-        return 2
     from datetime import datetime
 
+    from clodick.desktop.main import current_link
     from clodick.sync.google import GoogleSheetClient, SheetsError
     from clodick.sync.tables import sync_all
 
+    link = current_link(config, state)
+    if link is None:
+        print("Google Sheet is not connected: open Setup in the app or see docs/SHEETS.md.")
+        return 2
     try:
-        client = GoogleSheetClient(
-            paths.data_dir() / config.sheets.key_file, config.sheets.spreadsheet_id
-        )
+        client = GoogleSheetClient.from_link(link)
         report = sync_all(repo, client, datetime.now())
     except SheetsError as exc:
         print(exc, file=sys.stderr)
@@ -176,7 +176,8 @@ def _sync(repo: CompletionRepository, config) -> int:
     except Exception as exc:  # сеть, лимиты Google
         print(f"Sync failed: {exc}", file=sys.stderr)
         return 1
-    print(f"Synced as {client.account}: {report.pulled} rows in, {report.pushed} rows out.")
+    who = f" as {client.account}" if client.account else ""
+    print(f"Synced{who}: {report.pulled} rows in, {report.pushed} rows out.")
     return 0
 
 

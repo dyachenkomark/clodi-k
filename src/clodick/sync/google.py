@@ -1,12 +1,30 @@
-"""Доступ к Google Таблице через сервисный аккаунт. gspread грузится только здесь."""
+"""Доступ к Google Таблице. gspread грузится только здесь и только когда он нужен.
+
+Два способа войти:
+
+- **Вход через Google (OAuth)** — для всех. Пользователь нажимает кнопку, в браузере
+  разрешает доступ, клодик сам создаёт у него таблицу «cloDICK». Права — `drive.file`:
+  клодик видит только созданные им файлы, остальной Диск ему недоступен. Нужен файл
+  OAuth-клиента приложения `google-oauth-client.json`, его один раз делает разработчик.
+- **Сервисный аккаунт** — для продвинутых: свой JSON-ключ и таблица, открытая аккаунту.
+"""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 # Сколько ждать ответа Google, секунды: сеть не должна подвешивать синхронизацию.
 TIMEOUT_SECONDS = 20
+# Только файлы, созданные самим клодиком. Google относит эти права к несекретным.
+OAUTH_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+SHEET_TITLE = "cloDICK"
+# Файл OAuth-клиента приложения: в пакете (его кладёт разработчик) или в папке данных.
+OAUTH_CLIENT_NAME = "google-oauth-client.json"
+# Токен входа пользователя: в папке данных, рядом с кэшем.
+TOKEN_NAME = "google-token.json"
 
 
 def column_letter(index: int) -> str:
@@ -22,6 +40,133 @@ class SheetsError(Exception):
     """Таблица недоступна. Текст уже понятен человеку."""
 
 
+@dataclass(frozen=True)
+class SheetLink:
+    """Как клодик ходит в таблицу. Сохраняется мастером настройки.
+
+    mode: "oauth" — вход через Google, "service" — ключ сервисного аккаунта.
+    key_file: для service — путь к ключу; для oauth — путь к токену входа.
+    """
+
+    mode: str
+    spreadsheet_id: str
+    key_file: str
+    url: str = ""
+
+    def to_dict(self) -> dict:
+        return {"mode": self.mode, "spreadsheet_id": self.spreadsheet_id,
+                "key_file": self.key_file, "url": self.url}  # fmt: skip
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> SheetLink | None:
+        if not data or data.get("mode") not in ("oauth", "service"):
+            return None
+        if not data.get("spreadsheet_id") or not data.get("key_file"):
+            return None
+        return cls(data["mode"], data["spreadsheet_id"], data["key_file"], data.get("url", ""))
+
+
+def oauth_client_file(data_dir: Path) -> Path | None:
+    """Файл OAuth-клиента приложения, если он есть: сначала в папке данных, потом в пакете."""
+    for folder in (data_dir, Path(__file__).resolve().parents[1] / "assets"):
+        candidate = folder / OAUTH_CLIENT_NAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _gspread():
+    import gspread  # тяжёлый импорт: только когда таблица действительно нужна
+
+    return gspread
+
+
+def service_account_email(key_file: Path) -> str:
+    if not key_file.is_file():
+        raise SheetsError(f"Key file not found: {key_file}")
+    try:
+        return json.loads(key_file.read_text(encoding="utf-8"))["client_email"]
+    except (ValueError, KeyError) as exc:
+        raise SheetsError(f"{key_file.name} is not a service account key") from exc
+
+
+def authorize(link: SheetLink):
+    """gspread-клиент по сохранённому способу входа. Без браузера: токен уже есть."""
+    gspread = _gspread()
+    key = Path(link.key_file)
+    if link.mode == "service":
+        service_account_email(key)
+        return gspread.service_account(filename=str(key))
+    if not key.is_file():
+        raise SheetsError("Google sign-in expired. Open Setup and sign in again.")
+    from google.oauth2.credentials import Credentials
+
+    try:
+        creds = Credentials.from_authorized_user_file(str(key), OAUTH_SCOPES)
+    except ValueError as exc:
+        raise SheetsError("Google sign-in is broken. Open Setup and sign in again.") from exc
+    return gspread.authorize(creds)
+
+
+def sign_in(client_file: Path, token_file: Path, flow: Callable | None = None):
+    """Вход через Google в браузере. Возвращает gspread-клиент, токен сохраняется в token_file.
+
+    flow — для тестов: функция (client_config, scopes) → Credentials.
+    """
+    gspread = _gspread()
+    if flow is None:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        def flow(config: dict, scopes: list[str]):
+            app_flow = InstalledAppFlow.from_client_config(config, scopes)
+            return app_flow.run_local_server(
+                port=0,
+                open_browser=True,
+                authorization_prompt_message="",
+                success_message="cloDICK is connected. You can close this tab.",
+            )
+
+    try:
+        config = json.loads(client_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SheetsError(f"Broken OAuth client file: {client_file}") from exc
+    creds = flow(config, OAUTH_SCOPES)
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(creds.to_json(), encoding="utf-8")
+    return gspread.authorize(creds)
+
+
+def find_or_create_sheet(gc, title: str = SHEET_TITLE) -> tuple[str, str]:
+    """Таблица клодика у пользователя: найти созданную раньше или создать новую.
+
+    С правами drive.file поиск видит только файлы клодика, так что чужие таблицы
+    с тем же названием не попадутся. Возвращает id и адрес.
+    """
+    gspread = _gspread()
+    try:
+        found = gc.openall(title)
+        book = found[0] if found else gc.create(title)
+    except gspread.exceptions.APIError as exc:
+        raise SheetsError(f"Google API error: {exc}") from exc
+    return book.id, book.url
+
+
+def open_by_link(gc, sheet: str) -> tuple[str, str]:
+    """Открыть таблицу по адресу или id (для сервисного аккаунта). Возвращает id и адрес."""
+    gspread = _gspread()
+    try:
+        book = gc.open_by_url(sheet) if "/" in sheet else gc.open_by_key(sheet.strip())
+    except gspread.SpreadsheetNotFound as exc:
+        raise SheetsError("Spreadsheet not found. Check the link.") from exc
+    except gspread.NoValidUrlKeyFound as exc:
+        raise SheetsError("This does not look like a Google Sheets link.") from exc
+    except PermissionError as exc:
+        raise SheetsError("No access. Share the sheet with the service account.") from exc
+    except gspread.exceptions.APIError as exc:
+        raise SheetsError(f"Google API error: {exc}") from exc
+    return book.id, book.url
+
+
 class GoogleSheetClient:
     """Реализация SheetClient из engine.py поверх gspread.
 
@@ -29,32 +174,30 @@ class GoogleSheetClient:
     и то, что записали, потом читается теми же символами.
     """
 
-    def __init__(self, key_file: Path, spreadsheet_id: str) -> None:
-        import gspread  # тяжёлый импорт: только когда синхронизация включена
-
-        self._gspread = gspread
-        if not key_file.is_file():
-            raise SheetsError(f"Key file not found: {key_file}")
+    def __init__(self, gc, spreadsheet_id: str, account: str = "") -> None:
+        self._gspread = _gspread()
+        self.account = account
+        gc.set_timeout(TIMEOUT_SECONDS)
         try:
-            # Почта сервисного аккаунта: ей надо открыть доступ к таблице.
-            self.account = json.loads(key_file.read_text(encoding="utf-8"))["client_email"]
-        except (ValueError, KeyError) as exc:
-            raise SheetsError(f"{key_file.name} is not a service account key") from exc
-        try:
-            client = gspread.service_account(filename=str(key_file))
-            client.set_timeout(TIMEOUT_SECONDS)
-            self._book = client.open_by_key(spreadsheet_id)
-        except gspread.SpreadsheetNotFound as exc:
+            self._book = gc.open_by_key(spreadsheet_id)
+        except self._gspread.SpreadsheetNotFound as exc:
             raise SheetsError("Spreadsheet not found. Check spreadsheet_id.") from exc
         except PermissionError as exc:
-            raise SheetsError(
-                f"No access. Share the sheet with {self.account} as an editor."
-            ) from exc
-        except gspread.exceptions.APIError as exc:
+            who = account or "this account"
+            raise SheetsError(f"No access. Share the sheet with {who} as an editor.") from exc
+        except self._gspread.exceptions.APIError as exc:
             raise SheetsError(f"Google API error: {exc}") from exc
-        except ValueError as exc:
-            raise SheetsError(f"Key file is not a service account key: {exc}") from exc
         self._sheets: dict = {}
+
+    @classmethod
+    def from_link(cls, link: SheetLink) -> GoogleSheetClient:
+        account = service_account_email(Path(link.key_file)) if link.mode == "service" else ""
+        return cls(authorize(link), link.spreadsheet_id, account)
+
+    @classmethod
+    def service_account(cls, key_file: Path, spreadsheet_id: str) -> GoogleSheetClient:
+        """Вход по ключу из config.toml ([sheets])."""
+        return cls.from_link(SheetLink("service", spreadsheet_id, str(key_file)))
 
     def _sheet(self, tab: str):
         if tab not in self._sheets:

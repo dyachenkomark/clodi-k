@@ -175,4 +175,4 @@ def test_cli_add_tasks_and_sync_not_set_up(capsys):
 
     assert main(["add", "by", "fri"]) == 2
     assert main(["sync"]) == 2
-    assert "not set up" in capsys.readouterr().out
+    assert "not connected" in capsys.readouterr().out
