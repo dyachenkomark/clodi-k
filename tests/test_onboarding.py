@@ -216,10 +216,23 @@ class FakeSync:
 
 
 class FakeLLM:
+    """Клиент модели без сети. На «сервере» сейчас SERVER_MODELS."""
+
     fail = False
+    SERVER_MODELS = ("gemma-3-12b-it",)
 
     def __init__(self, settings, key=""):
         self.settings, self.key = settings, key
+
+    @property
+    def auto(self):
+        return not self.settings.model
+
+    def list_models(self):
+        return list(FakeLLM.SERVER_MODELS)
+
+    def model_name(self):
+        return self.settings.model or llm.pick_model(self.list_models())
 
     def check(self):
         if FakeLLM.fail:
@@ -306,15 +319,17 @@ def test_whole_first_run_with_google_sign_in_and_a_model(setup_world):
 
     dialog.sheet_next.click()
     assert dialog.pages.currentIndex() == MODEL
-    dialog.llm_url.setText("http://box:11434/v1/")
-    dialog.llm_model.setText("gemma3:12b")
-    dialog.llm_key.setText("secret")
+    dialog.llm_url.setText("http://box:8000/v1/")
+    dialog.llm_key.setText("secret")  # модель не указываем: пусть следует за сервером
     dialog.llm_check.click()
-    assert "The model answered: OK" in dialog.llm_status.text()
+    assert "gemma-3-12b-it answered: OK" in dialog.llm_status.text()
+    assert "I'll follow" in dialog.llm_status.text()
+    assert dialog.llm_model.count() == 1  # список моделей с сервера
+    assert dialog.llm_model.currentText() == ""  # но не закреплена
     assert desktop._state.get("llm") is None  # проверка ещё не сохраняет
 
     dialog.llm_save.click()
-    assert desktop._state.get("llm") == {"base_url": "http://box:11434/v1", "model": "gemma3:12b"}
+    assert desktop._state.get("llm") == {"base_url": "http://box:8000/v1", "model": ""}
     assert keys["llm"] == "secret"
     assert dialog.pages.currentIndex() == DONE
 
@@ -374,7 +389,7 @@ def test_model_errors_are_shown_and_nothing_is_saved(setup_world):
     dialog.llm_save.click()
     assert "Fill in the address" in dialog.llm_status.text()
     dialog.llm_url.setText("http://box/v1")
-    dialog.llm_model.setText("gemma")
+    dialog.llm_model.setEditText("gemma")
     dialog.llm_save.click()
     assert "Cannot reach the box" in dialog.llm_status.text()
     assert desktop._state.get("llm") is None
@@ -406,7 +421,7 @@ def test_saved_settings_come_back_after_restart(setup_world, qapp, config, repo)
     assert again._llm.settings.model == "gemma"
     assert again._llm.key == "secret"
     again.open_setup()
-    assert again.setup.llm_model.text() == "gemma"
+    assert again.setup.llm_model.currentText() == "gemma"
     for window in (again.pet, again.bubble, again.checklist, again.setup):
         window.close()
 
@@ -588,3 +603,54 @@ def test_key_kinds(tmp_path):
         path.write_text(json.dumps(data), encoding="utf-8")
         assert google.key_kind(path) == kind
     assert google.key_kind(tmp_path / "missing.json") == google.UNKNOWN
+
+
+# --- модель следует за сервером ---
+
+
+class FakeServer:
+    """vLLM в памяти: отдаёт список моделей и отвечает, только если модель та, что загружена."""
+
+    def __init__(self, model):
+        self.model = model
+        self.lists = 0
+
+    def get(self, url, headers, timeout):
+        self.lists += 1
+        return FakeResponse(payload={"data": [{"id": "bge-embed"}, {"id": self.model}]})
+
+    def post(self, url, json, headers, timeout):
+        if json["model"] != self.model:
+            return FakeResponse(404, text=f"The model `{json['model']}` does not exist.")
+        return answer(f"hi from {self.model}")
+
+
+def test_auto_model_follows_the_server_when_it_changes():
+    server = FakeServer("gemma-3-12b-it")
+    client = llm.LLMClient(llm.LLMSettings("http://box/v1"), post=server.post, get=server.get)
+    assert client.auto
+    assert client.chat("s", "u") == "hi from gemma-3-12b-it"
+    assert client.chat("s", "u") == "hi from gemma-3-12b-it"
+    assert server.lists == 1  # список спрашиваем один раз, а не перед каждым вопросом
+
+    server.model = "qwen3-14b"  # на сервере сменили модель
+    assert client.chat("s", "u") == "hi from qwen3-14b"
+    assert server.lists == 2
+
+
+def test_pinned_model_explains_when_it_is_gone():
+    server = FakeServer("qwen3-14b")
+    settings = llm.LLMSettings("http://box/v1", "gemma-3-12b-it")
+    client = llm.LLMClient(settings, post=server.post, get=server.get)
+    with pytest.raises(llm.LLMError, match="Clear the model field"):
+        client.chat("s", "u")
+
+
+def test_pick_model_skips_embedding_models():
+    assert llm.pick_model(["bge-m3", "text-embed-3", "gemma-3-12b-it"]) == "gemma-3-12b-it"
+    assert llm.pick_model(["only-embed"]) == "only-embed"
+
+
+def test_old_settings_without_model_still_load():
+    assert llm.LLMSettings.from_dict({"base_url": "http://box/v1/"}).model == ""
+    assert llm.LLMSettings.from_dict({"model": "x"}) is None

@@ -746,26 +746,40 @@ class DesktopApp(QObject):
         log.info("таблица подключена: %s (%s)", link.spreadsheet_id, link.mode)
 
     def _setup_llm(self, url: str, model: str, key: str, *, save: bool) -> None:
-        settings = llm.LLMSettings(llm.normalize_url(url), model.strip())
+        base_url = llm.normalize_url(url)
         key = key.strip() or self._env.load_key()
-        client = self._env.llm_client(settings, key)
+        env = self._env
 
-        def done(answer, error) -> None:
+        def work():
+            """Короткий вопрос модели. Модель не указана — следуем за сервером."""
+            client = env.llm_client(llm.LLMSettings(base_url, model.strip()), key)
+            answer = client.check()
+            models = client.list_models() if client.auto else []
+            return client, models, answer
+
+        def done(result, error) -> None:
             if error is not None:
                 self.setup.set_llm_status(f"Didn't work: {error}", False)
                 return
+            client, models, answer = result
+            settings = client.settings
+            if models:
+                self.setup.set_models(models, settings.model)
+            follow = " If the server switches models, I'll follow." if client.auto else ""
             if not save:
-                self.setup.set_llm_status(f"The model answered: {answer[:60]}", True)
+                self.setup.set_llm_status(
+                    f"{client.model_name()} answered: {answer[:30]}.{follow}", True
+                )
                 return
             if key:
                 self._env.save_key(key)
             self._state.set("llm", settings.to_dict())
             self._llm = client
-            log.info("модель подключена: %s %s", settings.base_url, settings.model)
-            self.setup.set_llm_status("Saved. I'll use it for plans.", True)
+            log.info("модель подключена: %s %s", settings.base_url, settings.model or "авто")
+            self.setup.set_llm_status(f"Saved. I'll use it for plans.{follow}", True)
             self.setup.show_page(DONE)
 
-        self._background(client.check, done)
+        self._background(work, done)
 
     def _setup_closed(self) -> None:
         """Закрыли крестиком: больше не открываться само, вернуть можно из меню."""

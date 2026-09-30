@@ -27,19 +27,24 @@ class LLMError(Exception):
     """Модель недоступна или ответила не так. Текст понятен человеку."""
 
 
+class ModelGone(LLMError):
+    """Сервер не знает такой модели: её сменили или выгрузили."""
+
+
 @dataclass(frozen=True)
 class LLMSettings:
     base_url: str
-    model: str
+    # Пусто — «какая модель сейчас на сервере»: спросить у него и следовать за сменой.
+    model: str = ""
 
     def to_dict(self) -> dict:
         return {"base_url": self.base_url, "model": self.model}
 
     @classmethod
     def from_dict(cls, data: dict | None) -> LLMSettings | None:
-        if not data or not data.get("base_url") or not data.get("model"):
+        if not data or not data.get("base_url"):
             return None
-        return cls(normalize_url(data["base_url"]), data["model"].strip())
+        return cls(normalize_url(data["base_url"]), (data.get("model") or "").strip())
 
 
 def normalize_url(url: str) -> str:
@@ -71,17 +76,72 @@ def save_key(key: str) -> None:
 
 
 class LLMClient:
-    def __init__(self, settings: LLMSettings, api_key: str = "", post=requests.post) -> None:
+    def __init__(
+        self, settings: LLMSettings, api_key: str = "", post=requests.post, get=requests.get
+    ) -> None:
         self.settings = settings
         self._key = api_key
         self._post = post
+        self._get = get
+        # Модель, которую сервер отдаёт сейчас, если в настройках она не закреплена.
+        self._resolved: str | None = None
 
-    def chat(self, system: str, user: str, max_tokens: int = 300) -> str:
+    @property
+    def auto(self) -> bool:
+        return not self.settings.model
+
+    def model_name(self, refresh: bool = False) -> str:
+        """Имя модели для запроса: закреплённое или то, что сейчас стоит на сервере."""
+        if self.settings.model:
+            return self.settings.model
+        if refresh or self._resolved is None:
+            models = self.list_models()
+            if not models:
+                raise LLMError("The server has no models loaded.")
+            self._resolved = pick_model(models)
+        return self._resolved
+
+    def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
         if self._key:
             headers["Authorization"] = f"Bearer {self._key}"
+        return headers
+
+    def list_models(self) -> list[str]:
+        """Какие модели есть на сервере: GET /models, так умеют vLLM, Ollama и LM Studio."""
+        url = f"{self.settings.base_url}/models"
+        try:
+            response = self._get(url, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+        except requests.RequestException as exc:
+            raise LLMError(f"Cannot reach {self.settings.base_url}: {exc}") from exc
+        if response.status_code in (401, 403):
+            raise LLMError("The API key was rejected.")
+        if response.status_code >= 400:
+            raise LLMError(
+                "The server did not list its models. Check the address "
+                "(usually it ends with /v1) or type the model name yourself."
+            )
+        try:
+            return [item["id"] for item in response.json()["data"] if item.get("id")]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LLMError("The server answered, but not with a list of models.") from exc
+
+    def chat(self, system: str, user: str, max_tokens: int = 300) -> str:
+        try:
+            return self._chat(self.model_name(), system, user, max_tokens)
+        except ModelGone:
+            if not self.auto:
+                raise LLMError(
+                    f"The server has no model {self.settings.model}. "
+                    "Clear the model field in Setup, and I'll follow the server."
+                ) from None
+            # На сервере сменили модель: перечитать список и повторить один раз.
+            return self._chat(self.model_name(refresh=True), system, user, max_tokens)
+
+    def _chat(self, model: str, system: str, user: str, max_tokens: int) -> str:
+        headers = self._headers()
         body = {
-            "model": self.settings.model,
+            "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "max_tokens": max_tokens,
             "temperature": 0.4,
@@ -93,8 +153,10 @@ class LLMClient:
             raise LLMError(f"Cannot reach {self.settings.base_url}: {exc}") from exc
         if response.status_code in (401, 403):
             raise LLMError("The API key was rejected.")
+        if response.status_code in (400, 404) and "model" in response.text.casefold():
+            raise ModelGone(model)  # vLLM: «The model `x` does not exist.»
         if response.status_code == 404:
-            raise LLMError("Not found. Check the address (usually it ends with /v1) and model.")
+            raise LLMError("Not found. Check the address: usually it ends with /v1.")
         if response.status_code >= 400:
             raise LLMError(f"The API answered {response.status_code}: {response.text[:200]}")
         try:
@@ -106,6 +168,17 @@ class LLMClient:
     def check(self) -> str:
         """Проверка подключения: короткий ответ модели."""
         return self.chat("You are a connection test.", "Reply with the single word: OK", 10)
+
+
+def pick_model(models: list[str]) -> str:
+    """Какую модель взять, если человек не выбрал: первую, что годится для чата.
+
+    Модели для эмбеддингов, переранжирования и распознавания речи отвечать текстом
+    не умеют, их пропускаем.
+    """
+    skip = ("embed", "rerank", "whisper", "tts", "clip", "bge", "e5-")
+    usable = [m for m in models if not any(word in m.casefold() for word in skip)]
+    return (usable or models)[0]
 
 
 def strip_thinking(text: str) -> str:

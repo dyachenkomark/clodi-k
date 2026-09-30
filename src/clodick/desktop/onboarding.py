@@ -10,6 +10,7 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -94,6 +95,12 @@ QToolButton#pick {{
 QToolButton#pick:checked {{ border-color: {t.accent}; }}
 QToolButton#pick:hover {{ border-color: {t.muted}; }}
 QScrollArea#pagescroll, QScrollArea#pagescroll > QWidget > QWidget {{ background: transparent; }}
+QComboBox {{
+    color: {t.text}; background: {t.box_bg}; font-size: 13px; font-family: {t.body_font};
+    border: 1px solid {t.muted}; border-radius: 6px; padding: 3px 6px;
+}}
+QComboBox:focus {{ border-color: {t.accent}; }}
+QComboBox QAbstractItemView {{ color: {t.text}; background: {t.panel_bg}; }}
 """
     )
 
@@ -343,14 +350,17 @@ class SetupDialog(QWidget):
     def _build_model(self) -> None:
         _, box = self._page(
             "Want me smarter?",
-            "Give me an AI model with an OpenAI-compatible API: vLLM, Ollama, LM Studio "
-            "or a cloud one. I'll plan your day from your tasks and notes.",
+            "Give me the address of an OpenAI-compatible API (vLLM, Ollama, LM Studio or a "
+            "cloud one) and its key. I'll plan your day from your tasks and notes. "
+            "The model I'll find on the server myself.",
         )
         self.llm_url = QLineEdit(placeholderText="Address, e.g. http://localhost:11434/v1")
-        self.llm_model = QLineEdit(placeholderText="Model, e.g. gemma3:12b")
         self.llm_key = QLineEdit(placeholderText="API key, if the server needs one")
         self.llm_key.setEchoMode(QLineEdit.EchoMode.Password)
-        for field in (self.llm_url, self.llm_model, self.llm_key):
+        # Модель не обязательна: пусто — спросим список у сервера и выберем сами.
+        self.llm_model = QComboBox(editable=True)
+        self.llm_model.lineEdit().setPlaceholderText("Model: leave empty, I'll find it")
+        for field in (self.llm_url, self.llm_key, self.llm_model):
             box.addWidget(field)
         self.llm_status = QLabel("", objectName="status", wordWrap=True)
         self.llm_status.hide()
@@ -365,19 +375,25 @@ class SetupDialog(QWidget):
 
     def set_llm_fields(self, url: str, model: str, has_key: bool) -> None:
         self.llm_url.setText(url)
-        self.llm_model.setText(model)
+        self.llm_model.setEditText(model)
         if has_key:
             self.llm_key.setPlaceholderText("Saved key is kept. Type to replace it")
 
     def _llm(self, signal) -> None:
-        url, model = self.llm_url.text().strip(), self.llm_model.text().strip()
-        if not url or not model:
-            self.set_llm_status("Fill in the address and the model name.", False)
+        url, model = self.llm_url.text().strip(), self.llm_model.currentText().strip()
+        if not url:
+            self.set_llm_status("Fill in the address of the API.", False)
             return
-        self.set_llm_status("Asking the model…")
+        self.set_llm_status("Asking the server…")
         self.llm_check.setEnabled(False)
         self.llm_save.setEnabled(False)
         signal.emit(url, model, self.llm_key.text())
+
+    def set_models(self, models: list[str], current: str) -> None:
+        """Модели с сервера в выпадающий список; выбранная — current."""
+        self.llm_model.clear()
+        self.llm_model.addItems(models)
+        self.llm_model.setEditText(current)
 
     def set_llm_status(self, text: str, ok: bool | None = None) -> None:
         self.llm_status.setText(text)
@@ -477,12 +493,15 @@ class SetupDialog(QWidget):
     def show_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
         self._fit()
-        # Страницу показывают впервые: стиль к ней применится в следующем цикле событий,
-        # тогда размер надо пересчитать ещё раз.
-        QTimer.singleShot(0, self._fit)
 
-    def _fit(self) -> None:
-        """Окно по размеру видимой страницы."""
+    def _fit(self, again: bool = True) -> None:
+        """Окно по размеру видимой страницы.
+
+        Новая страница или строка статуса получает стиль только в следующем цикле событий,
+        поэтому размер пересчитывается ещё раз чуть позже.
+        """
+        if again:
+            QTimer.singleShot(0, lambda: self._fit(again=False))
         # Высоту строк с переносами считаем, когда стиль со шрифтом уже применён.
         # QLabel.heightForWidth здесь завышает высоту, поэтому меряем текст шрифтом сами.
         for label in getattr(self, "_step_labels", []):
