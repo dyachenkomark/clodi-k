@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -23,7 +24,46 @@ from PySide6.QtWidgets import (
 from clodick.desktop.themes import THEMES, Theme
 from clodick.desktop.widgets import checklist_style
 
-HELLO, SHEET, MODEL, DONE = range(4)
+HELLO, SHEET, MODEL, DONE, GUIDE = range(5)
+
+DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+
+# Помощник для входа через Google: шаги для человека, который в Google Cloud впервые.
+# (текст, адрес для кнопки Open или None)
+GUIDE_STEPS = (
+    (
+        "Create a project. Name it cloDICK and press Create. Already have one? Skip this.",
+        "https://console.cloud.google.com/projectcreate",
+    ),
+    (
+        "Turn on Google Sheets: press the blue Enable button.",
+        "https://console.cloud.google.com/apis/library/sheets.googleapis.com",
+    ),
+    (
+        "Turn on Google Drive the same way: press Enable.",
+        "https://console.cloud.google.com/apis/library/drive.googleapis.com",
+    ),
+    (
+        "Name the app. Press Get started, type cloDICK and your email, press Next. "
+        "Choose External, press Next, type your email again, tick the box, press Create.",
+        "https://console.developers.google.com/auth/branding",
+    ),
+    (
+        "Own files only. Press Copy, then Open. Press «Add or remove scopes», "
+        "paste at the bottom, press Update, then Save.",
+        "https://console.developers.google.com/auth/scopes",
+    ),
+    (
+        "Let yourself in. Under Test users press «Add users», type your Gmail, press Save.",
+        "https://console.developers.google.com/auth/audience",
+    ),
+    (
+        "Make the key. Press «Create client», choose Desktop app, press Create. "
+        "In the window that opens press Download JSON.",
+        "https://console.developers.google.com/auth/clients",
+    ),
+    ("Give me the file. I'll look for it in your Downloads.", None),
+)
 
 
 def setup_style(theme: Theme) -> str:
@@ -43,6 +83,9 @@ QPushButton:disabled {{ color: {t.muted}; border-color: {t.muted}; }}
 QPushButton#primary {{ color: {t.panel_bg}; background: {t.accent}; border-color: {t.accent}; }}
 QPushButton#link {{ border: none; background: transparent; color: {t.muted}; padding: 2px 0; }}
 QPushButton#link:hover {{ color: {t.text}; }}
+QPushButton#small {{ padding: 2px 8px; font-size: 12px; }}
+QLabel#step {{ color: {t.accent}; font-weight: 700; font-size: 13px; }}
+QLabel#steptext {{ color: {t.text}; font-size: 12px; }}
 QToolButton#pick {{
     color: {t.text}; background: transparent; border: 2px solid transparent;
     border-radius: 8px; padding: 4px; font-size: 12px; font-family: {t.body_font};
@@ -91,6 +134,10 @@ class SetupDialog(QWidget):
     llm_check_requested = Signal(str, str, str)  # адрес, модель, ключ
     llm_save_requested = Signal(str, str, str)
     finished = Signal()
+    # Помощник входа через Google: открыть страницу, найти файл сам, выбрать файл руками.
+    open_url_requested = Signal(str)
+    client_find_requested = Signal()
+    client_file_chosen = Signal(str)
 
     WIDTH = 330
 
@@ -116,6 +163,7 @@ class SetupDialog(QWidget):
         self._build_sheet()
         self._build_model()
         self._build_done()
+        self._build_guide()
         self.setFixedWidth(self.WIDTH)
 
     # --- страницы ---
@@ -184,11 +232,14 @@ class SetupDialog(QWidget):
         self.google_button.clicked.connect(self._google)
         box.addWidget(self.google_button)
         self.no_google = QLabel(
-            "Google sign-in is not set up in this build. Use a service account key below.",
+            "Google sign-in needs a one-time setup, about 10 minutes. I'll walk you through it.",
             objectName="status",
             wordWrap=True,
         )
         box.addWidget(self.no_google)
+        self.guide_button = QPushButton("Set up Google sign-in", objectName="primary")
+        self.guide_button.clicked.connect(lambda: self.show_page(GUIDE))
+        box.addWidget(self.guide_button)
 
         self.service_toggle = QPushButton("I have a service account key", objectName="link")
         self.service_toggle.clicked.connect(lambda: self._service_box.setVisible(True))
@@ -227,9 +278,7 @@ class SetupDialog(QWidget):
     def set_google_available(self, available: bool) -> None:
         self.google_button.setVisible(available)
         self.no_google.setVisible(not available)
-        if not available:
-            self._service_box.show()
-            self.service_toggle.hide()
+        self.guide_button.setVisible(not available)
 
     def _google(self) -> None:
         self.set_sheet_status("A browser tab opens: choose your Google account and allow access.")
@@ -326,6 +375,77 @@ class SetupDialog(QWidget):
         self.finish_button.clicked.connect(self.finished)
         box.addLayout(self._row(self.finish_button))
 
+    def _build_guide(self) -> None:
+        _, box = self._page(
+            "Set up Google sign-in",
+            "Once, about 10 minutes. Do the steps in order: each Open button takes you to "
+            "the right page. Sign in there with your usual Google account.",
+        )
+        self.guide_open: list[QPushButton] = []
+        self._step_labels: list[QLabel] = []
+        # Точная ширина текста: иначе Qt неверно считает высоту строк с переносами
+        # и последняя строка шага обрезается.
+        text_width = self.WIDTH - 32 - 16 - 60 - 16
+        for number, (text, url) in enumerate(GUIDE_STEPS, start=1):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            number_label = QLabel(str(number), objectName="step")
+            number_label.setFixedWidth(16)
+            row.addWidget(number_label, 0, Qt.AlignmentFlag.AlignTop)
+            label = QLabel(text, objectName="steptext", wordWrap=True)
+            label.setFixedWidth(text_width if url else text_width + 68)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self._step_labels.append(label)
+            row.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
+            if url:
+                buttons = QVBoxLayout()
+                buttons.setSpacing(4)
+                if "scopes" in url:
+                    self.copy_scope = QPushButton("Copy", objectName="small")
+                    self.copy_scope.setFixedWidth(60)
+                    self.copy_scope.clicked.connect(self._copy_scope)
+                    buttons.addWidget(self.copy_scope)
+                button = QPushButton("Open", objectName="small")
+                button.setFixedWidth(60)
+                button.clicked.connect(lambda _=False, u=url: self.open_url_requested.emit(u))
+                buttons.addWidget(button)
+                buttons.addStretch()
+                row.addLayout(buttons)
+                self.guide_open.append(button)
+            row.addStretch()
+            box.addLayout(row)
+        self.find_client = QPushButton("Find it", objectName="primary")
+        self.find_client.clicked.connect(self._find_client)
+        self.choose_client = QPushButton("Choose file…")
+        self.choose_client.clicked.connect(self._choose_client)
+        box.addLayout(self._row(self.choose_client, self.find_client))
+        self.guide_status = QLabel("", objectName="status", wordWrap=True)
+        self.guide_status.hide()
+        box.addWidget(self.guide_status)
+        back = QPushButton("Back")
+        back.clicked.connect(lambda: self.show_page(SHEET))
+        box.addLayout(self._row(back))
+
+    def _copy_scope(self) -> None:
+        QGuiApplication.clipboard().setText(DRIVE_FILE_SCOPE)
+        self.copy_scope.setText("Copied")
+
+    def _find_client(self) -> None:
+        self.set_guide_status("Looking in Downloads…")
+        self.client_find_requested.emit()
+
+    def _choose_client(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "The downloaded JSON", "", "JSON (*.json)")
+        if path:
+            self.client_file_chosen.emit(path)
+
+    def set_guide_status(self, text: str, ok: bool | None = None) -> None:
+        self.guide_status.setText(text)
+        self.guide_status.setVisible(bool(text))
+        self.guide_status.setObjectName("statusok" if ok else "status")
+        self.guide_status.setStyleSheet("")
+        self._fit()
+
     # --- показ ---
 
     def show_page(self, index: int) -> None:
@@ -334,6 +454,10 @@ class SetupDialog(QWidget):
 
     def _fit(self) -> None:
         """Окно по размеру видимой страницы."""
+        # Высоту строк с переносами считаем, когда стиль со шрифтом уже применён.
+        for label in getattr(self, "_step_labels", []):
+            label.ensurePolished()
+            label.setMinimumHeight(label.heightForWidth(label.width()) + 4)
         self.layout().activate()
         self.adjustSize()
 

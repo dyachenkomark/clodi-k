@@ -45,7 +45,7 @@ from clodick.desktop.brain import (
     Brain,
     Mode,
 )
-from clodick.desktop.onboarding import DONE, HELLO, SetupDialog
+from clodick.desktop.onboarding import DONE, HELLO, SHEET, SetupDialog
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import BOTTOM_PAD, BubbleWindow, ChecklistPopup, PetWindow
@@ -114,6 +114,9 @@ class SetupEnv:
     llm_client: Callable = llm.LLMClient
     load_key: Callable = llm.load_key
     save_key: Callable = llm.save_key
+    # Где искать скачанный файл клиента и чем открывать ссылки из помощника.
+    downloads: Path = Path.home() / "Downloads"
+    open_url: Callable = None
 
     @classmethod
     def default(cls) -> SetupEnv:
@@ -632,7 +635,43 @@ class DesktopApp(QObject):
         dialog.llm_check_requested.connect(lambda u, m, k: self._setup_llm(u, m, k, save=False))
         dialog.llm_save_requested.connect(lambda u, m, k: self._setup_llm(u, m, k, save=True))
         dialog.finished.connect(self._setup_finished)
+        dialog.open_url_requested.connect(self._open_url)
+        dialog.client_find_requested.connect(self._find_client_file)
+        dialog.client_file_chosen.connect(lambda path: self._install_client(Path(path)))
         return dialog
+
+    def _open_url(self, url: str) -> None:
+        if self._env.open_url is not None:
+            self._env.open_url(url)
+        else:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _find_client_file(self) -> None:
+        found = google.find_downloaded_client(self._env.downloads)
+        if found is None:
+            self.setup.set_guide_status(
+                "I couldn't find it in Downloads. Press Choose file… and pick the JSON you "
+                "downloaded in step 7. Its name starts with client_secret.",
+                False,
+            )
+            return
+        self._install_client(found)
+
+    def _install_client(self, source: Path) -> None:
+        try:
+            target = google.install_oauth_client(source, self._env.data_dir)
+        except google.SheetsError as exc:
+            self.setup.set_guide_status(str(exc), False)
+            return
+        self._env.oauth_client = target
+        log.info("файл OAuth-клиента установлен: %s", target)
+        self.setup.set_google_available(True)
+        self.setup.set_guide_status("")
+        self.setup.show_page(SHEET)
+        self.setup.set_sheet_status("Done! Now press «Sign in with Google».", None)
 
     def _setup_google(self) -> None:
         env = self._env

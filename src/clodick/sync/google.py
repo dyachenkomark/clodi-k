@@ -75,6 +75,44 @@ def oauth_client_file(data_dir: Path) -> Path | None:
     return None
 
 
+def check_oauth_client(path: Path) -> dict:
+    """Проверить скачанный файл клиента. Ошибки — простыми словами для человека."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SheetsError("This file is not the one from Google Cloud. Download it again.") from exc
+    if "web" in data:
+        raise SheetsError(
+            "This key is for a website. In Google Cloud create a new one with type Desktop app."
+        )
+    installed = data.get("installed") if isinstance(data, dict) else None
+    if not isinstance(installed, dict) or not installed.get("client_id"):
+        if isinstance(data, dict) and data.get("type") == "service_account":
+            raise SheetsError(
+                "This is a service account key. Use «I have a service account key» instead."
+            )
+        raise SheetsError("This is not an OAuth client file. Download the JSON of a Desktop app.")
+    return data
+
+
+def install_oauth_client(source: Path, data_dir: Path) -> Path:
+    """Скопировать проверенный файл клиента в папку данных под нужным именем."""
+    check_oauth_client(source)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / OAUTH_CLIENT_NAME
+    target.write_bytes(source.read_bytes())
+    return target
+
+
+def find_downloaded_client(downloads: Path) -> Path | None:
+    """Самый свежий скачанный файл клиента: Google называет его client_secret_….json."""
+    try:
+        found = [p for p in downloads.glob("client_secret*.json") if p.is_file()]
+    except OSError:
+        return None
+    return max(found, key=lambda p: p.stat().st_mtime, default=None)
+
+
 def _gspread():
     import gspread  # тяжёлый импорт: только когда таблица действительно нужна
 

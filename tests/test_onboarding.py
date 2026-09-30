@@ -14,7 +14,7 @@ from clodick import llm
 from clodick.core.models import Category, CategoryStatus, DayStatus, Task
 from clodick.core.tracker import Tracker
 from clodick.desktop.controller import DesktopApp, SetupEnv
-from clodick.desktop.onboarding import DONE, HELLO, MODEL, SHEET
+from clodick.desktop.onboarding import DONE, GUIDE, HELLO, MODEL, SHEET
 from clodick.storage.state import StateStore
 from clodick.sync import google
 
@@ -405,3 +405,91 @@ def test_saved_settings_come_back_after_restart(setup_world, qapp, config, repo)
     assert again.setup.llm_model.text() == "gemma"
     for window in (again.pet, again.bubble, again.checklist, again.setup):
         window.close()
+
+
+# --- помощник входа через Google ---
+
+DESKTOP_CLIENT = {"installed": {"client_id": "id.apps.googleusercontent.com", "client_secret": "s"}}
+
+
+def test_oauth_client_file_is_checked_in_plain_words(tmp_path):
+    good = tmp_path / "client_secret_1.json"
+    good.write_text(json.dumps(DESKTOP_CLIENT), encoding="utf-8")
+    assert google.check_oauth_client(good)["installed"]["client_id"]
+
+    cases = {
+        "web.json": ({"web": {"client_id": "x"}}, "for a website"),
+        "svc.json": ({"type": "service_account", "client_email": "a@b"}, "service account key"),
+        "other.json": ({"hello": 1}, "not an OAuth client"),
+    }
+    for name, (data, message) in cases.items():
+        path = tmp_path / name
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(google.SheetsError, match=message):
+            google.check_oauth_client(path)
+    junk = tmp_path / "junk.json"
+    junk.write_text("not json", encoding="utf-8")
+    with pytest.raises(google.SheetsError, match="Download it again"):
+        google.check_oauth_client(junk)
+
+
+def test_newest_download_is_found(tmp_path):
+    import os
+    import time
+
+    assert google.find_downloaded_client(tmp_path) is None
+    assert google.find_downloaded_client(tmp_path / "missing") is None
+    old, new = tmp_path / "client_secret_old.json", tmp_path / "client_secret_new.json"
+    for path in (old, new):
+        path.write_text("{}", encoding="utf-8")
+    past = time.time() - 3600
+    os.utime(old, (past, past))
+    (tmp_path / "notes.json").write_text("{}", encoding="utf-8")
+    assert google.find_downloaded_client(tmp_path) == new
+
+
+def test_guide_walks_a_beginner_to_the_sign_in_button(setup_world, tmp_path):
+    desktop, env, _, _, _ = setup_world
+    env.oauth_client = None
+    opened = []
+    env.open_url = opened.append
+    env.downloads = tmp_path / "Downloads"
+    env.downloads.mkdir()
+    desktop.open_setup()
+    dialog = desktop.setup
+    dialog.show_page(SHEET)
+    assert not dialog.google_button.isVisibleTo(dialog)
+    assert dialog.guide_button.isVisibleTo(dialog)
+
+    dialog.guide_button.click()
+    assert dialog.pages.currentIndex() == GUIDE
+    for button in dialog.guide_open:
+        button.click()
+    assert len(opened) == 7
+    assert all(url.startswith("https://console.") for url in opened)
+
+    dialog.copy_scope.click()
+    assert QApplication.clipboard().text() == "https://www.googleapis.com/auth/drive.file"
+
+    dialog.find_client.click()
+    assert "couldn't find it" in dialog.guide_status.text()
+
+    wrong = env.downloads / "client_secret_web.json"
+    wrong.write_text(json.dumps({"web": {"client_id": "x"}}), encoding="utf-8")
+    dialog.find_client.click()
+    assert "for a website" in dialog.guide_status.text()
+
+    right = env.downloads / "client_secret_desktop.json"
+    right.write_text(json.dumps(DESKTOP_CLIENT), encoding="utf-8")
+    import os
+    import time
+
+    later = time.time() + 5
+    os.utime(right, (later, later))
+    dialog.find_client.click()
+    installed = env.data_dir / "google-oauth-client.json"
+    assert json.loads(installed.read_text(encoding="utf-8")) == DESKTOP_CLIENT
+    assert env.oauth_client == installed
+    assert dialog.pages.currentIndex() == SHEET
+    assert dialog.google_button.isVisibleTo(dialog)
+    assert "Sign in with Google" in dialog.sheet_status.text()
