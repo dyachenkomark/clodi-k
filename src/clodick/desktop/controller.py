@@ -49,7 +49,7 @@ from clodick.desktop.onboarding import DONE, HELLO, RECONNECT, SHEET, SetupDialo
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import BOTTOM_PAD, BubbleWindow, ChecklistPopup, PetWindow
-from clodick.storage.state import StateStore
+from clodick.storage.state import EXTERNAL_CHANGE, StateStore
 from clodick.sync import google
 
 log = logging.getLogger(__name__)
@@ -62,6 +62,8 @@ ACTIVE_TICK_MS = 80
 IDLE_TICK_MS = 1000
 RAM_REFRESH_MS = 5000
 REMINDER_CHECK_MS = 30_000
+# Как часто смотреть, не поменял ли задачи кто-то снаружи (Claude через MCP).
+EXTERNAL_CHECK_MS = 3000
 GREETING_DELAY_MS = 3000
 # Отступ енота от правого края экрана при первом запуске.
 START_MARGIN = 24
@@ -231,6 +233,10 @@ class DesktopApp(QObject):
             self, interval=REMINDER_CHECK_MS, timeout=self._check_reminders
         )
         self._cursor_timer = QTimer(self, interval=CURSOR_POLL_MS, timeout=self._watch_cursor)
+        self._external_timer = QTimer(
+            self, interval=EXTERNAL_CHECK_MS, timeout=self.check_external_changes
+        )
+        self._external_seen = None
         self._hop_timer = QTimer(self, interval=HOP_FRAME_MS, timeout=self._hop_step)
 
         self.pet.clicked.connect(self._pet_clicked)
@@ -273,6 +279,8 @@ class DesktopApp(QObject):
         self._tick_timer.start(IDLE_TICK_MS)
         self._ram_timer.start()
         self._reminder_timer.start()
+        self._external_seen = self._state.get(EXTERNAL_CHANGE)
+        self._external_timer.start()
         if self._playful:
             self._cursor_timer.start()
         self._pomodoro_changed(save=False)
@@ -485,6 +493,20 @@ class DesktopApp(QObject):
     def check_reminders_now(self) -> None:
         """Для тестов и отладки: проверить напоминания немедленно."""
         self._check_reminders()
+
+    def check_external_changes(self) -> None:
+        """Claude поменял задачи через MCP: показать это и отправить правку в таблицу."""
+        change = self._state.get(EXTERNAL_CHANGE)
+        if not change or change == self._external_seen:
+            return
+        self._external_seen = change
+        log.info("правка снаружи: %s", change.get("text"))
+        if self.sync is not None:
+            self.sync.request()
+        if self.checklist.isVisible():
+            self._refresh_checklist()
+        elif self._reminders_on and self.pomodoro.phase is not Phase.FOCUS:
+            self.say(f"{change.get('text', 'Tasks updated')}.", 5, wave=False)
 
     def _toggle(self, key: str, checked: bool) -> None:
         if checked:

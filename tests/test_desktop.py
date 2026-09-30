@@ -817,3 +817,23 @@ def test_switching_topic_tabs_does_not_move_the_checklist(make_desktop):
     assert checklist.width() >= width
     checklist.topic_buttons[""].click()
     assert checklist.pos() == corner
+
+
+def test_pet_notices_changes_made_by_claude(make_desktop):
+    from clodick.mcp_server import Desk
+
+    desktop, tracker, _ = make_desktop()
+    desktop.check_external_changes()
+    assert not desktop.bubble.isVisible()
+
+    Desk(tracker, desktop._state).add_task("buy milk")  # как будто через MCP
+    desktop.check_external_changes()
+    assert desktop.bubble.text == "Claude added «buy milk»."
+    desktop.bubble.hide()
+    desktop.check_external_changes()  # та же правка второй раз не озвучивается
+    assert not desktop.bubble.isVisible()
+
+    desktop.open_checklist()
+    Desk(tracker, desktop._state).add_task("call bank")
+    desktop.check_external_changes()
+    assert "call bank" in [b.text() for b in desktop.checklist.boxes.values()]

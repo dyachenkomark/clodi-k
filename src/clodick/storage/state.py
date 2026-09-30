@@ -7,6 +7,10 @@ import sqlite3
 import threading
 from typing import Any
 
+# Правка задач снаружи (MCP-сервер для Claude): {"at": момент, "text": что сделано}.
+# Енот следит за этим ключом, обновляет чек-лист и отправляет правку в таблицу.
+EXTERNAL_CHANGE = "external_change"
+
 
 class StateStore:
     def __init__(self, conn: sqlite3.Connection) -> None:
