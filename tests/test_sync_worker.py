@@ -94,3 +94,21 @@ def test_google_client_explains_key_problems(tmp_path):
 
 def test_column_letters():
     assert [column_letter(n) for n in (1, 10, 26, 27, 52)] == ["A", "J", "Z", "AA", "AZ"]
+
+
+def test_worker_notices_that_google_access_expired(db):
+    from google.auth.exceptions import RefreshError
+
+    path, _ = db
+
+    def factory():
+        raise RefreshError("invalid_grant: Token has been expired or revoked.")
+
+    sync = worker.SheetSync(path, factory, period=60)
+    sync.start()
+    try:
+        assert wait_for(lambda: sync.needs_sign_in)
+        assert "reconnect" in sync.status
+    finally:
+        sync.stop()
+        sync._thread.join(timeout=5)

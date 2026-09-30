@@ -40,6 +40,25 @@ class SheetsError(Exception):
     """Таблица недоступна. Текст уже понятен человеку."""
 
 
+class AccessExpired(SheetsError):
+    """Google больше не принимает вход: токен отозван или устарел. Нужно войти заново."""
+
+
+def access_expired(exc: BaseException) -> bool:
+    """Это ошибка «войдите заново», а не сбой сети, который пройдёт сам?
+
+    Google отвечает invalid_grant, когда refresh_token отозвали, он устарел или
+    приложение в Google Cloud в режиме Testing (там токен живёт 7 дней).
+    """
+    if isinstance(exc, AccessExpired):
+        return True
+    try:
+        from google.auth.exceptions import RefreshError
+    except ImportError:
+        return False
+    return isinstance(exc, RefreshError) and not getattr(exc, "retryable", False)
+
+
 @dataclass(frozen=True)
 class SheetLink:
     """Как клодик ходит в таблицу. Сохраняется мастером настройки.
@@ -171,7 +190,7 @@ def authorize(link: SheetLink):
         service_account_email(key)
         return gspread.service_account(filename=str(key))
     if not key.is_file():
-        raise SheetsError("Google sign-in expired. Open Setup and sign in again.")
+        raise AccessExpired("Google sign-in expired. Reconnect Google in the menu.")
     from google.oauth2.credentials import Credentials
 
     try:
@@ -189,18 +208,7 @@ def sign_in(client_file: Path, token_file: Path, flow: Callable | None = None):
     flow — для тестов: функция (client_config, scopes) → Credentials.
     """
     gspread = _gspread()
-    if flow is None:
-        from google_auth_oauthlib.flow import InstalledAppFlow
-
-        def flow(config: dict, scopes: list[str]):
-            app_flow = InstalledAppFlow.from_client_config(config, scopes)
-            return app_flow.run_local_server(
-                port=0,
-                open_browser=True,
-                authorization_prompt_message="",
-                success_message="cloDICK is connected. You can close this tab.",
-            )
-
+    flow = flow or browser_flow()
     try:
         config = json.loads(client_file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -209,6 +217,60 @@ def sign_in(client_file: Path, token_file: Path, flow: Callable | None = None):
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(creds.to_json(), encoding="utf-8")
     return gspread.authorize(creds)
+
+
+def browser_flow(login_hint: str = "") -> Callable:
+    """Вход в браузере: Google спрашивает разрешение и возвращает ключи на localhost."""
+
+    def flow(config: dict, scopes: list[str]):
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        app_flow = InstalledAppFlow.from_client_config(config, scopes)
+        extra = {"login_hint": login_hint} if login_hint else {}
+        return app_flow.run_local_server(
+            port=0,
+            open_browser=True,
+            authorization_prompt_message="",
+            success_message="cloDICK is connected. You can close this tab.",
+            **extra,
+        )
+
+    return flow
+
+
+def reconnect(link: SheetLink, client_file: Path | None = None, flow: Callable | None = None):
+    """Войти заново, когда Google перестал принимать токен. Таблица остаётся та же.
+
+    Клиент и права берём из старого токена: так вход повторяет прежний, даже если
+    токен пришёл из другой программы. Нет их в токене — берём файл клиента клодика.
+    """
+    if link.mode != "oauth":
+        raise SheetsError("This sheet uses a key file. Choose a new key in Setup.")
+    token = Path(link.key_file)
+    try:
+        old = json.loads(token.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    if old.get("client_id") and old.get("client_secret"):
+        config = {
+            "installed": {
+                "client_id": old["client_id"],
+                "client_secret": old["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": old.get("token_uri") or "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://localhost"],
+            }
+        }
+    elif client_file is not None and client_file.is_file():
+        config = check_oauth_client(client_file)
+    else:
+        raise SheetsError("I don't know how you signed in before. Open Setup and sign in again.")
+    scopes = old.get("scopes") or OAUTH_SCOPES
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    creds = (flow or browser_flow(old.get("account", "")))(config, list(scopes))
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text(creds.to_json(), encoding="utf-8")
 
 
 def find_or_create_sheet(gc, title: str = SHEET_TITLE) -> tuple[str, str]:

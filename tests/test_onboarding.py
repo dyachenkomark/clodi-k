@@ -14,7 +14,7 @@ from clodick import llm
 from clodick.core.models import Category, CategoryStatus, DayStatus, Task
 from clodick.core.tracker import Tracker
 from clodick.desktop.controller import DesktopApp, SetupEnv
-from clodick.desktop.onboarding import DONE, GUIDE, HELLO, MODEL, SHEET
+from clodick.desktop.onboarding import DONE, GUIDE, HELLO, MODEL, RECONNECT, SHEET
 from clodick.storage.state import StateStore
 from clodick.sync import google
 
@@ -259,6 +259,7 @@ def test_find_or_create_sheet(monkeypatch):
 
 class FakeSync:
     status = "Sheet synced 09:00"
+    needs_sign_in = False
 
     def __init__(self, link):
         self.link = link
@@ -334,6 +335,7 @@ def setup_world(qapp, config, repo, tmp_path):
         data_dir=tmp_path,
         oauth_client=tmp_path / "client.json",
         sign_in=sign_in,
+        reconnect=lambda link, client: signed.setdefault("reconnected", []).append(link),
         find_or_create=lambda gc: ("sheet123", "https://docs.google.com/spreadsheets/d/sheet123"),
         authorize=lambda link: ("svc", link.key_file),
         open_link=lambda gc, link: ("svc456", link),
@@ -762,3 +764,97 @@ def test_pick_model_skips_embedding_models():
 def test_old_settings_without_model_still_load():
     assert llm.LLMSettings.from_dict({"base_url": "http://box/v1/"}).model == ""
     assert llm.LLMSettings.from_dict({"model": "x"}) is None
+
+
+# --- Google отозвал вход ---
+
+
+class TokenCreds:
+    def __init__(self, text):
+        self.text = text
+
+    def to_json(self):
+        return self.text
+
+
+def test_reconnect_repeats_the_old_sign_in(tmp_path):
+    token = tmp_path / "token.json"
+    token.write_text(json.dumps({
+        "client_id": "id-1", "client_secret": "sec", "refresh_token": "dead",
+        "scopes": ["https://www.googleapis.com/auth/spreadsheets"], "account": "me@x.com",
+    }), encoding="utf-8")  # fmt: skip
+    seen = {}
+
+    def flow(config, scopes):
+        seen.update(config=config, scopes=scopes)
+        return TokenCreds('{"refresh_token": "fresh"}')
+
+    google.reconnect(google.SheetLink("oauth", "s1", str(token)), None, flow)
+    assert seen["config"]["installed"]["client_id"] == "id-1"
+    assert seen["scopes"] == ["https://www.googleapis.com/auth/spreadsheets"]  # права те же
+    assert json.loads(token.read_text(encoding="utf-8")) == {"refresh_token": "fresh"}
+
+
+def test_reconnect_without_old_token_uses_the_app_client(tmp_path):
+    client = tmp_path / "client.json"
+    client.write_text(json.dumps({"installed": {"client_id": "app"}}), encoding="utf-8")
+    seen = {}
+
+    def flow(config, scopes):
+        seen.update(config=config, scopes=scopes)
+        return TokenCreds("{}")
+
+    link = google.SheetLink("oauth", "s1", str(tmp_path / "gone.json"))
+    google.reconnect(link, client, flow)
+    assert seen["config"]["installed"]["client_id"] == "app"
+    assert seen["scopes"] == google.OAUTH_SCOPES
+    with pytest.raises(google.SheetsError, match="sign in again"):
+        google.reconnect(link, None, flow)
+    with pytest.raises(google.SheetsError, match="new key"):
+        google.reconnect(google.SheetLink("service", "s1", "key.json"), client, flow)
+
+
+def test_expired_access_is_told_apart_from_network_trouble():
+    from google.auth.exceptions import RefreshError
+
+    assert google.access_expired(RefreshError("invalid_grant: Token has been expired"))
+    assert google.access_expired(google.AccessExpired("gone"))
+    flaky = RefreshError("server busy", retryable=True)
+    assert not google.access_expired(flaky)
+    assert not google.access_expired(ConnectionError("offline"))
+
+
+def test_expired_access_opens_reconnect_once_and_reconnect_brings_sync_back(setup_world):
+    desktop, _, syncs, _, signed = setup_world
+    link = google.SheetLink("oauth", "sheet123", "token.json")
+    desktop.connect_sheet(link)
+    assert desktop._reconnect_action.isEnabled()
+    old = syncs[-1]
+
+    old.needs_sign_in = True
+    desktop._check_access()
+    dialog = desktop.setup
+    assert dialog.isVisible() and dialog.pages.currentIndex() == RECONNECT
+    dialog.hide()
+    desktop._check_access()  # уже предлагали: не открываться каждую минуту
+    assert not dialog.isVisible()
+
+    dialog.show()
+    dialog.reconnect_button.click()
+    assert signed["reconnected"] == [link]
+    assert old.stopped and syncs[-1] is not old and syncs[-1].started
+    assert not dialog.isVisible()
+    assert desktop.bubble.text.startswith("Access is back")
+
+    syncs[-1].needs_sign_in = True  # доступ пропал снова — снова предложить
+    desktop._check_access()
+    assert dialog.isVisible()
+
+
+def test_service_key_link_cannot_reconnect_and_goes_to_the_key_field(setup_world):
+    desktop, _, _, _, _ = setup_world
+    desktop.connect_sheet(google.SheetLink("service", "s1", "key.json"))
+    assert not desktop._reconnect_action.isEnabled()
+    desktop.open_reconnect()
+    assert desktop.setup.pages.currentIndex() == SHEET
+    assert "new one" in desktop.setup.sheet_status.text()

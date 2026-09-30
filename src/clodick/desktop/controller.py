@@ -45,7 +45,7 @@ from clodick.desktop.brain import (
     Brain,
     Mode,
 )
-from clodick.desktop.onboarding import DONE, HELLO, SHEET, SetupDialog
+from clodick.desktop.onboarding import DONE, HELLO, RECONNECT, SHEET, SetupDialog
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
 from clodick.desktop.widgets import BOTTOM_PAD, BubbleWindow, ChecklistPopup, PetWindow
@@ -108,6 +108,7 @@ class SetupEnv:
     data_dir: Path
     oauth_client: Path | None
     sign_in: Callable = google.sign_in
+    reconnect: Callable = google.reconnect
     find_or_create: Callable = google.find_or_create_sheet
     authorize: Callable = google.authorize
     open_link: Callable = google.open_by_link
@@ -169,6 +170,8 @@ class DesktopApp(QObject):
         self._jobs: set[_Job] = set()
         # Тесты ставят True: фоновая работа выполняется сразу, без потоков.
         self.inline_jobs = False
+        # Окно «войти заново» уже показали за эту потерю доступа.
+        self._access_offered = False
         self._relay = _Relay()
         self._relay.call.connect(lambda fn: fn(), Qt.ConnectionType.QueuedConnection)
         self._llm = self._load_llm(state)
@@ -661,7 +664,63 @@ class DesktopApp(QObject):
         dialog.open_url_requested.connect(self._open_url)
         dialog.client_find_requested.connect(self._find_client_file)
         dialog.client_file_chosen.connect(lambda path: self._install_client(Path(path)))
+        dialog.reconnect_requested.connect(self.reconnect_google)
         return dialog
+
+    # --- вход в Google заново ---
+
+    def _sheet_link(self):
+        return google.SheetLink.from_dict(self._state.get("sheet_link"))
+
+    def _can_reconnect(self) -> bool:
+        link = self._sheet_link()
+        return link is not None and link.mode == "oauth"
+
+    def open_reconnect(self) -> None:
+        if not self._can_reconnect():
+            self.open_setup()
+            self.setup.show_page(SHEET)
+            self.setup.set_sheet_status("The sheet key no longer works. Choose a new one.", False)
+            return
+        if self.setup is None:
+            self.setup = self._build_setup()
+        self.checklist.hide()
+        self.bubble.hide()
+        self.setup.set_reconnect_status("")
+        self.setup.show_page(RECONNECT)
+        self.setup.open_near(self.pet.geometry(), self._screen_rect())
+
+    def _check_access(self) -> None:
+        """Google отозвал вход — один раз открыть окно «Reconnect», а не молчать."""
+        expired = self.sync is not None and getattr(self.sync, "needs_sign_in", False)
+        if not expired:
+            self._access_offered = False
+            return
+        if self._access_offered or self.pomodoro.phase is Phase.FOCUS:
+            return
+        self._access_offered = True
+        log.warning("Google больше не принимает вход, предлагаю войти заново")
+        self.open_reconnect()
+
+    def reconnect_google(self) -> None:
+        link, env = self._sheet_link(), self._env
+        if link is None:
+            self.setup.set_reconnect_status("No sheet is connected. Open Setup.", False)
+            return
+
+        def done(_, error) -> None:
+            if error is not None:
+                log.warning("вход заново не удался: %s", error)
+                self.setup.set_reconnect_status(f"Didn't work: {error}", False)
+                return
+            log.info("вход в Google восстановлен")
+            self._access_offered = False
+            self.connect_sheet(link)
+            self.setup.set_reconnect_status("Access is back!", True)
+            self.setup.hide()
+            self.say("Access is back. Syncing with the sheet again.", 5)
+
+        self._background(lambda: env.reconnect(link, env.oauth_client), done)
 
     def _open_url(self, url: str) -> None:
         if self._env.open_url is not None:
@@ -765,6 +824,7 @@ class DesktopApp(QObject):
             self.sync.start()
             self.sync.request()
         self._sync_action.setEnabled(self.sync is not None)
+        self._reconnect_action.setEnabled(self._can_reconnect())
         log.info("таблица подключена: %s (%s)", link.spreadsheet_id, link.mode)
 
     def _setup_llm(self, url: str, model: str, key: str, *, save: bool) -> None:
@@ -887,6 +947,7 @@ class DesktopApp(QObject):
         self.brain.tick(min(dt, 2.0))
         self._after_brain_change()
         self._after_tick(now)
+        self._check_access()
         if self.sync is not None and self.sync.pop_changed():
             # Из таблицы пришли правки: показать их, если чек-лист открыт.
             log.info("из таблицы пришли изменения")
@@ -1216,6 +1277,8 @@ class DesktopApp(QObject):
         menu.addAction("Climb the edge", self.climb_now)
         self._sync_action = menu.addAction("Sync with the sheet now", self.sync_now)
         self._sync_action.setEnabled(self.sync is not None)
+        self._reconnect_action = menu.addAction("Reconnect Google…", self.open_reconnect)
+        self._reconnect_action.setEnabled(self._can_reconnect())
         menu.addAction("Plan my day", self.plan_my_day)
         menu.addAction("Setup…", self.open_setup)
         menu.addAction("Start focus", lambda: self.start_focus())

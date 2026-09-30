@@ -26,7 +26,10 @@ from PySide6.QtWidgets import (
 from clodick.desktop.themes import THEMES, Theme
 from clodick.desktop.widgets import checklist_style
 
-HELLO, SHEET, MODEL, DONE, GUIDE = range(5)
+HELLO, SHEET, MODEL, DONE, GUIDE, RECONNECT = range(6)
+
+# Где в Google Cloud перевести приложение из Testing в рабочее (Publish app).
+AUDIENCE_URL = "https://console.developers.google.com/auth/audience"
 
 DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
@@ -148,6 +151,7 @@ class SetupDialog(QWidget):
     open_url_requested = Signal(str)
     client_find_requested = Signal()
     client_file_chosen = Signal(str)
+    reconnect_requested = Signal()
 
     WIDTH = 330
 
@@ -196,6 +200,7 @@ class SetupDialog(QWidget):
         self._build_model()
         self._build_done()
         self._build_guide()
+        self._build_reconnect()
         self.setFixedWidth(self.WIDTH)
 
     # --- страницы ---
@@ -415,6 +420,46 @@ class SetupDialog(QWidget):
         self.finish_button = QPushButton("Let's go", objectName="primary")
         self.finish_button.clicked.connect(self.finished)
         box.addLayout(self._row(self.finish_button))
+
+    def _build_reconnect(self) -> None:
+        _, box = self._page(
+            "My Google access expired",
+            "Google asks to confirm access from time to time. Press Reconnect, choose the "
+            "same account in the browser and allow access. Your sheet and tasks stay as they "
+            "are, and nothing is lost: I kept every change on this computer.",
+        )
+        self.reconnect_status = QLabel("", objectName="status", wordWrap=True)
+        self.reconnect_status.hide()
+        box.addWidget(self.reconnect_status)
+        self.reconnect_later = QPushButton("Later")
+        self.reconnect_later.clicked.connect(self.hide)
+        self.reconnect_button = QPushButton("Reconnect", objectName="primary")
+        self.reconnect_button.clicked.connect(self._reconnect)
+        box.addLayout(self._row(self.reconnect_later, self.reconnect_button))
+        hint = QLabel(
+            "Google asks every 7 days? Your app in Google Cloud is in Testing mode. "
+            "Open Audience there and press «Publish app» once.",
+            objectName="status",
+            wordWrap=True,
+        )
+        box.addWidget(hint)
+        self.audience_open = QPushButton("Open Audience", objectName="small")
+        self.audience_open.clicked.connect(lambda: self.open_url_requested.emit(AUDIENCE_URL))
+        box.addLayout(self._row(self.audience_open))
+
+    def _reconnect(self) -> None:
+        self.set_reconnect_status("A browser tab opens: choose your account and allow access.")
+        self.reconnect_button.setEnabled(False)
+        self.reconnect_requested.emit()
+
+    def set_reconnect_status(self, text: str, ok: bool | None = None) -> None:
+        self.reconnect_status.setText(text)
+        self.reconnect_status.setVisible(bool(text))
+        self.reconnect_status.setObjectName("statusok" if ok else "status")
+        self.reconnect_status.setStyleSheet("")
+        if ok is not None:
+            self.reconnect_button.setEnabled(True)
+        self._fit()
 
     def _build_guide(self) -> None:
         _, box = self._page(

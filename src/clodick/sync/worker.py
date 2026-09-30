@@ -14,6 +14,7 @@ from pathlib import Path
 from clodick.storage.db import connect
 from clodick.storage.repository import CompletionRepository
 from clodick.sync.engine import SheetClient
+from clodick.sync.google import access_expired
 from clodick.sync.tables import sync_all
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ class SheetSync:
         self._thread: threading.Thread | None = None
         self.last_ok: datetime | None = None
         self.error: str | None = None
+        # Google отозвал вход: само не пройдёт, человеку нужно войти заново.
+        self.needs_sign_in = False
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="sheet-sync", daemon=True)
@@ -61,6 +64,8 @@ class SheetSync:
 
     @property
     def status(self) -> str:
+        if self.needs_sign_in:
+            return "Sheet: Google access expired, reconnect in the menu"
         if self.error:
             return f"Sheet: {self.error}"
         if self.last_ok:
@@ -81,10 +86,12 @@ class SheetSync:
                     if report.pulled or report.pushed:
                         log.info("таблица: пришло %s, ушло %s", report.pulled, report.pushed)
                     self.last_ok, self.error = self._clock(), None
+                    self.needs_sign_in = False
                 except Exception as exc:  # сеть, лимиты, права: попробуем в следующий раз
                     if str(exc) != self.error:
                         log.warning("таблица недоступна: %s", exc)
                     self.error = str(exc)[:120]
+                    self.needs_sign_in = access_expired(exc)
                     client = None
                 if self._wake.wait(self._period) and not self._stop.is_set():
                     self._stop.wait(DEBOUNCE_SECONDS)
