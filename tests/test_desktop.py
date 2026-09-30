@@ -1,5 +1,6 @@
 import dataclasses
 import random
+import re
 from datetime import datetime
 
 import pytest
@@ -643,7 +644,8 @@ def test_checklist_shows_deadlines_and_soon_section(make_desktop):
     assert [i.category.title for i in status.upcoming] == ["report"]
     report, rent = status.upcoming[0].category.key, status.items[3].category.key
     labels = desktop.checklist.meta_labels
-    assert labels[report].text() == "maga · Tue 29 Sep · 15:00"
+    # Тема окрашена в свой цвет: сравниваем текст без разметки.
+    assert re.sub("<[^>]+>", "", labels[report].text()) == "maga · Tue 29 Sep · 15:00"
     assert labels[rent].text() == "overdue 6d"
     assert labels[rent].objectName() == "metalate"
     assert desktop.checklist.section_label.text() == "SOON"
@@ -719,3 +721,84 @@ def test_local_changes_ask_for_sync_and_sheet_changes_refresh_checklist(qapp, co
             window.close()
             window.deleteLater()
         qapp.processEvents()
+
+
+# --- темы в чек-листе ---
+
+
+def test_topic_tabs_filter_the_list_and_new_tasks_land_in_the_open_topic(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    tracker.add_topic("Turkov")
+    tracker.add_topic("Daily")
+    tracker.add_from_text("fix login", topic="Turkov")
+    tracker.add_from_text("buy milk")
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    assert list(checklist.topic_buttons) == ["", "Turkov", "Daily"]
+    assert len(checklist.boxes) == 5  # All: всё
+
+    checklist.topic_buttons["Turkov"].click()
+    assert [b.text() for b in checklist.boxes.values()] == ["fix login"]
+    assert checklist._progress.text() == "0/1"
+    assert desktop._state.get("topic") == "Turkov"
+    checklist.new_task.setText("deploy by fri")
+    checklist.new_task.returnPressed.emit()
+    # Срок в пятницу: задача в разделе SOON этой же темы.
+    assert [b.text() for b in checklist.boxes.values()] == ["fix login", "deploy"]
+    assert checklist.section_label is not None
+    assert [i.category.project for i in tracker.status().upcoming] == ["Turkov"]
+
+    checklist.topic_buttons["Daily"].click()
+    assert not checklist.new_task_daily.isVisibleTo(checklist)  # и так каждый день
+    assert set(checklist.boxes) == {"sport", "study", "language"}
+    checklist.new_task.setText("stretch")
+    checklist.new_task.returnPressed.emit()
+    stretch = next(t for t in tracker._repo.tasks() if t.title == "stretch")
+    assert stretch.daily and stretch.project == "Daily"
+
+    desktop.checklist.hide()
+    desktop.open_checklist()  # вкладка запоминается
+    assert desktop.checklist.topic == "Daily"
+
+
+def test_topics_are_made_renamed_and_removed_from_the_checklist(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    checklist.add_topic_button.click()
+    assert checklist.topic_edit.isVisible()
+    checklist.topic_edit.setText("Maga")
+    checklist.topic_edit.returnPressed.emit()
+    assert [t.name for t in tracker.topics()] == ["Maga"]
+    assert checklist.topic == "Maga"  # новая тема сразу открыта
+
+    menu = checklist.topic_menu("Maga")
+    rename = next(a for a in menu.actions() if a.text().startswith("Rename"))
+    rename.trigger()
+    checklist.topic_edit.setText("Okkam")
+    checklist.topic_edit.returnPressed.emit()
+    assert [t.name for t in tracker.topics()] == ["Okkam"]
+    assert checklist.topic == "Okkam"
+
+    menu = checklist.topic_menu("Okkam")
+    every_day = next(a for a in menu.actions() if a.text() == "Every day")
+    every_day.trigger()
+    assert tracker.topic("Okkam").daily
+
+    menu = checklist.topic_menu("Okkam")
+    next(a for a in menu.actions() if a.text().startswith("Delete")).trigger()
+    assert tracker.topics() == []
+    assert checklist.topic == ""
+
+
+def test_task_can_move_to_another_topic(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    tracker.add_topic("Turkov")
+    tracker.add_topic("Maga")
+    task = tracker.add_from_text("report", topic="Turkov")
+    desktop.open_checklist()
+    menu = desktop.checklist.task_menu(task.key)
+    move = menu.actions()[0].menu()
+    assert [a.text() for a in move.actions() if a.text()] == ["Turkov", "Maga", "No topic"]
+    next(a for a in move.actions() if a.text() == "Maga").trigger()
+    assert tracker._repo.get_task(task.id).project == "Maga"

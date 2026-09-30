@@ -8,13 +8,25 @@ from datetime import date, datetime, timedelta
 
 from clodick.config import Config
 from clodick.core import quickadd
-from clodick.core.models import Category, CategoryStatus, DayStatus, Note, Task, task_id
+from clodick.core.models import (
+    Category,
+    CategoryStatus,
+    DayStatus,
+    Note,
+    Task,
+    Topic,
+    task_id,
+)
 from clodick.storage.repository import CompletionRepository, new_uid
 
 Clock = Callable[[], datetime]
 
 # На сколько дней вперёд показывать задачи в разделе «Скоро».
 SOON_DAYS = 7
+# Цвета новых тем по кругу: различимы и на тёмном, и на светлом чек-листе.
+TOPIC_COLORS = ("#e8792b", "#4a90d9", "#9b6bd6", "#2fa37a", "#d9557a", "#c9a227", "#3fb0c4")
+# Тема с таким именем сразу ежедневная.
+DAILY_NAMES = {"daily", "дэйли", "дейли", "ежедневно", "ежедневное", "каждый день", "привычки"}
 
 
 def logical_day(moment: datetime, day_start_hour: int) -> date:
@@ -42,6 +54,7 @@ class Tracker:
         self._repo = repo
         self._clock = clock
         repo.fill_titles({cat.key: cat.title for cat in config.categories})
+        self._seed_topics()
 
     def today(self) -> date:
         return logical_day(self._clock(), self._config.day_start_hour)
@@ -116,16 +129,111 @@ class Tracker:
         )
         return self._repo.save_task(task)
 
-    def add_from_text(self, text: str, daily: bool = False) -> Task:
-        """Задача из короткой записи: «мага: отчёт до пт в 15:00»."""
-        parsed = quickadd.parse(text, self.today(), self._config.projects)
+    def add_from_text(self, text: str, daily: bool = False, topic: str = "") -> Task:
+        """Задача из короткой записи: «мага: отчёт до пт в 15:00».
+
+        topic — открытая вкладка чек-листа: тема по умолчанию, если в записи её нет.
+        """
+        parsed = quickadd.parse(text, self.today(), self.projects())
+        project = parsed.project or topic
+        found = self.topic(project)
         return self.add_task(
             parsed.title,
-            daily or parsed.daily,
-            project=parsed.project,
+            daily or parsed.daily or (found is not None and found.daily),
+            project=found.name if found else project,
             due=parsed.due,
             time=parsed.time,
         )
+
+    def move_task(self, key: str, topic: str) -> Task:
+        """Перенести задачу в другую тему. Пустая тема — без темы."""
+        _, task = self._find(key)
+        if task is None:
+            raise KeyError(f"«{key}» is not a task")
+        return self._repo.save_task(replace(task, project=topic))
+
+    # --- темы ---
+
+    def topics(self) -> list[Topic]:
+        """Темы по порядку. Проект задачи без своей темы тоже показывается темой."""
+        seen: set[str] = set()
+        out: list[Topic] = []
+        for topic in self._repo.topics():
+            if topic.name.casefold() not in seen:
+                seen.add(topic.name.casefold())
+                out.append(topic)
+        for task in self._repo.tasks():
+            name = task.project.strip()
+            if name and name.casefold() not in seen:
+                seen.add(name.casefold())
+                out.append(Topic("", name, color=self._color(len(out))))
+        return out
+
+    def topic(self, name: str) -> Topic | None:
+        wanted = name.strip().casefold()
+        if not wanted:
+            return None
+        return next((t for t in self.topics() if t.name.casefold() == wanted), None)
+
+    def projects(self) -> dict[str, tuple[str, ...]]:
+        """Темы и их короткие имена для быстрой записи: из приложения и из config.toml."""
+        found = {name: tuple(aliases) for name, aliases in self._config.projects.items()}
+        for topic in self.topics():
+            key = next((n for n in found if n.casefold() == topic.name.casefold()), topic.name)
+            found[key] = tuple(dict.fromkeys((*found.get(key, ()), *topic.aliases)))
+        return found
+
+    def add_topic(self, name: str, daily: bool | None = None) -> Topic:
+        name = " ".join(name.split())
+        if not name:
+            raise ValueError("Topic name is empty")
+        existing = self.topic(name)
+        if existing is not None and existing.id:
+            return existing
+        count = len(self._repo.topics())
+        if daily is None:
+            daily = name.casefold() in DAILY_NAMES
+        topic = Topic(new_uid(), name, (name.casefold(),), self._color(count), daily, count)
+        return self._repo.save_topic(topic)
+
+    def update_topic(self, current: str, /, **changes) -> Topic:
+        """Поменять тему current: name (с переносом задач), color, daily."""
+        topic = self.topic(current)
+        if topic is None:
+            raise KeyError(f"Unknown topic «{current}»")
+        if not topic.id:  # тема из задач, ещё не сохранённая
+            topic = self.add_topic(topic.name)
+        new_name = " ".join(changes.pop("name", topic.name).split()) or topic.name
+        if new_name != topic.name:
+            self._repo.move_tasks(topic.name, new_name)
+            aliases = tuple(dict.fromkeys((*topic.aliases, new_name.casefold())))
+            changes["aliases"] = aliases
+        return self._repo.save_topic(replace(topic, name=new_name, **changes))
+
+    def remove_topic(self, name: str) -> None:
+        """Удалить тему. Её задачи остаются, но уже без темы."""
+        topic = self.topic(name)
+        if topic is None:
+            return
+        self._repo.move_tasks(topic.name, "")
+        for stored in self._repo.topics():
+            if stored.name.casefold() == topic.name.casefold():
+                self._repo.remove_topic(stored.id)
+
+    def _seed_topics(self) -> None:
+        """Первый запуск с темами: завести их из [projects] в config.toml."""
+        if self._repo.flag("topics_seeded"):
+            return
+        if not self._repo.topics():
+            for position, (name, aliases) in enumerate(self._config.projects.items()):
+                self._repo.save_topic(
+                    Topic(new_uid(), name, tuple(aliases), self._color(position), False, position)
+                )
+        self._repo.set_flag("topics_seeded")
+
+    @staticmethod
+    def _color(index: int) -> str:
+        return TOPIC_COLORS[index % len(TOPIC_COLORS)]
 
     def remove_task(self, key: str) -> bool:
         tid = task_id(key)

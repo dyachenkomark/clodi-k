@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from datetime import date, datetime
 
-from clodick.core.models import TASK_PREFIX, Note, Task
+from clodick.core.models import TASK_PREFIX, Note, Task, Topic
 
 
 def new_uid() -> str:
@@ -43,6 +43,13 @@ TASK_UPSERT = (
     "ON CONFLICT(id) DO UPDATE SET project=excluded.project, title=excluded.title, "
     "due=excluded.due, time=excluded.time, repeat=excluded.repeat, status=excluded.status, "
     "note=excluded.note, done_at=excluded.done_at, created_at=excluded.created_at"
+)
+
+
+TOPIC_UPSERT = (
+    "INSERT INTO topics (id, name, aliases, color, repeat, position) VALUES (?,?,?,?,?,?) "
+    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, aliases=excluded.aliases, "
+    "color=excluded.color, repeat=excluded.repeat, position=excluded.position"
 )
 
 
@@ -131,6 +138,55 @@ class CompletionRepository:
                 ),
             )
         return task
+
+    def move_tasks(self, old_topic: str, new_topic: str) -> int:
+        """Все задачи темы old_topic — в new_topic (пусто — без темы)."""
+        with self.lock, self.conn:
+            return self.conn.execute(
+                "UPDATE tasks SET project = ? WHERE project = ? COLLATE NOCASE",
+                (new_topic, old_topic),
+            ).rowcount
+
+    # --- темы ---
+
+    def topics(self) -> list[Topic]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, name, aliases, color, repeat, position FROM topics "
+                "ORDER BY position, rowid"
+            ).fetchall()
+        return [
+            Topic(tid, name, tuple(a.strip() for a in aliases.split(",") if a.strip()),
+                  color, repeat == "daily", position)
+            for tid, name, aliases, color, repeat, position in rows
+        ]  # fmt: skip
+
+    def save_topic(self, topic: Topic) -> Topic:
+        with self.lock, self.conn:
+            self.conn.execute(
+                TOPIC_UPSERT,
+                (topic.id, topic.name, ", ".join(topic.aliases), topic.color,
+                 "daily" if topic.daily else "", topic.position),
+            )  # fmt: skip
+        return topic
+
+    def remove_topic(self, topic_id: str) -> bool:
+        with self.lock, self.conn:
+            return self.conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,)).rowcount > 0
+
+    def flag(self, key: str) -> bool:
+        """Отметка «уже сделано» в общей таблице kv: например, темы уже заведены."""
+        with self.lock:
+            row = self.conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return row is not None and row[0] == "true"
+
+    def set_flag(self, key: str) -> None:
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO kv (key, value) VALUES (?, 'true') "
+                "ON CONFLICT(key) DO UPDATE SET value = 'true'",
+                (key,),
+            )
 
     def get_task(self, task_id: str) -> Task | None:
         with self.lock:

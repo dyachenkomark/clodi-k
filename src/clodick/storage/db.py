@@ -99,6 +99,19 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (tab, id)
     );
     """,
+    # 7: темы задач. Задача ссылается на тему по имени (tasks.project): так её видно
+    # и в таблице, и при ручной правке. Одинаковые имена не запрещены: они могут прийти
+    # с двух устройств сразу, тогда код берёт первую.
+    """
+    CREATE TABLE topics (
+        id       TEXT PRIMARY KEY,
+        name     TEXT NOT NULL,
+        aliases  TEXT NOT NULL DEFAULT '',   -- короткие имена через запятую
+        color    TEXT NOT NULL DEFAULT '',   -- #rrggbb
+        repeat   TEXT NOT NULL DEFAULT '',   -- daily или пусто
+        position INTEGER NOT NULL DEFAULT 0
+    );
+    """,
 ]
 
 

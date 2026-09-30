@@ -58,6 +58,31 @@ class Task:
 
 
 @dataclass(frozen=True)
+class Topic:
+    """Тема задач: Turkov, Maga, Personal, Daily. У задачи тема — поле project.
+
+    aliases — короткие имена для быстрой записи («мага: отчёт»).
+    daily — задачи темы повторяются каждый день, туда же попадают направления из настроек.
+    """
+
+    id: str
+    name: str
+    aliases: tuple[str, ...] = ()
+    color: str = ""
+    daily: bool = False
+    position: int = 0
+
+
+def in_topic(category: Category, topic: Topic | None) -> bool:
+    """Пункт во вкладке темы. В ежедневной теме — ещё и ежедневное без темы."""
+    if topic is None:
+        return True
+    if category.project.casefold() == topic.name.casefold():
+        return True
+    return topic.daily and category.daily and not category.project
+
+
+@dataclass(frozen=True)
 class Note:
     """Заметка к пункту чек-листа: результат, комментарий."""
 

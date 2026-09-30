@@ -2,7 +2,8 @@
 
 | Лист  | Что в нём |
 |---|---|
-| Tasks | Задачи: проект, название, срок, время, повтор, статус, заметка |
+| Topics | Темы: Turkov, Maga, Personal, Daily — имя, короткие имена, цвет, повтор |
+| Tasks | Задачи: проект (тема), название, срок, время, повтор, статус, заметка |
 | Log   | Отметки «сделано» по дням: направления, ежедневные и разовые задачи |
 | Notes | Заметки и результаты к пунктам |
 | Focus | Законченные фокусы Pomodoro |
@@ -18,7 +19,7 @@ import threading
 from datetime import datetime
 
 from clodick.core.quickadd import parse_date, parse_time
-from clodick.storage.repository import TASK_UPSERT, CompletionRepository, new_uid
+from clodick.storage.repository import TASK_UPSERT, TOPIC_UPSERT, CompletionRepository, new_uid
 from clodick.sync.engine import Report, Row, SheetClient, SyncState, sync_table
 
 DONE_WORDS = {"done", "x", "х", "+", "✓", "✔", "yes", "да", "готово", "сделано", "1", "true"}
@@ -59,6 +60,37 @@ class _SqlTable:
     def _run(self, sql: str, args: tuple) -> int:
         with self._lock, self._conn:
             return self._conn.execute(sql, args).rowcount
+
+
+class TopicsTable(_SqlTable):
+    tab = "Topics"
+    columns = ("id", "name", "aliases", "color", "repeat", "position")
+
+    def local_rows(self) -> dict[str, Row]:
+        rows = self._all("SELECT id, name, aliases, color, repeat, position FROM topics")
+        out = {}
+        for row in rows:
+            data = dict(zip(self.columns, row, strict=True))
+            data["position"] = str(data["position"])
+            out[data["id"]] = data
+        return out
+
+    def apply(self, row_id: str, row: Row | None) -> None:
+        if row is None:
+            self._run("DELETE FROM topics WHERE id = ?", (row_id,))
+            return
+        args = (row_id, row["name"], row["aliases"], row["color"], row["repeat"],
+                int(row["position"]))  # fmt: skip
+        self._run(TOPIC_UPSERT, args)
+
+    def normalize(self, row: Row, now: datetime) -> Row | None:
+        row["name"] = " ".join(row["name"].split())
+        if not row["name"]:
+            return None
+        row["id"] = row["id"] or new_uid()
+        row["repeat"] = "daily" if row["repeat"].casefold() in DAILY_WORDS else ""
+        row["position"] = row["position"].strip() if row["position"].strip().isdigit() else "0"
+        return row
 
 
 class TasksTable(_SqlTable):
@@ -243,7 +275,7 @@ class FocusTable(_SqlTable):
         return row
 
 
-TABLES = (TasksTable, LogTable, NotesTable, FocusTable)
+TABLES = (TopicsTable, TasksTable, LogTable, NotesTable, FocusTable)
 
 
 def sync_all(repo: CompletionRepository, client: SheetClient, now: datetime) -> Report:

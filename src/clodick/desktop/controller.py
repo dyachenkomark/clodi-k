@@ -242,6 +242,15 @@ class DesktopApp(QObject):
         self.checklist.toggled.connect(self._toggle)
         self.checklist.task_added.connect(self._add_task)
         self.checklist.task_removed.connect(self._remove_task)
+        self.checklist.task_moved.connect(self._move_task)
+        self.checklist.topic_selected.connect(self._select_topic)
+        self.checklist.topic_added.connect(self._add_topic)
+        self.checklist.topic_renamed.connect(self._rename_topic)
+        self.checklist.topic_removed.connect(self._remove_topic)
+        self.checklist.topic_daily.connect(lambda name, on: self._change_topic(name, daily=on))
+        self.checklist.topic_color.connect(
+            lambda name, color: self._change_topic(name, color=color)
+        )
         self.checklist.focus_requested.connect(self.start_focus)
         self.checklist.focus_stopped.connect(self.stop_focus)
         self.checklist.note_added.connect(self._add_note)
@@ -466,8 +475,12 @@ class DesktopApp(QObject):
 
     def open_checklist(self) -> None:
         self.bubble.hide()
-        self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
+        self._fill_checklist()
         self.checklist.open_near(self.pet.geometry(), self._screen_rect())
+
+    def _fill_checklist(self) -> None:
+        self.checklist.set_topics(self._tracker.topics(), self._state.get("topic") or "")
+        self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
 
     def check_reminders_now(self) -> None:
         """Для тестов и отладки: проверить напоминания немедленно."""
@@ -490,10 +503,10 @@ class DesktopApp(QObject):
             # Сразу предложить записать результат. Не обязательно: можно просто закрыть.
             self.checklist.ask_note(key)
 
-    def _add_task(self, text: str, daily: bool) -> None:
+    def _add_task(self, text: str, daily: bool, topic: str = "") -> None:
         """Задача из строки чек-листа: «мага: отчёт до пт в 15:00»."""
         try:
-            task = self._tracker.add_from_text(text, daily)
+            task = self._tracker.add_from_text(text, daily, topic)
         except ValueError:
             return  # в строке были только срок или проект, названия нет
         log.info("задача %s: проект %r, срок %s", task.id, task.project, task.due)
@@ -508,8 +521,51 @@ class DesktopApp(QObject):
 
     def _refresh_checklist(self) -> None:
         """Список изменился: перерисовать и заново прижать к еноту, размер мог поменяться."""
-        self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
+        self._fill_checklist()
         self.checklist.open_near(self.pet.geometry(), self._screen_rect())
+
+    # --- темы ---
+
+    def _select_topic(self, name: str) -> None:
+        self._state.set("topic", name)
+
+    def _add_topic(self, name: str) -> None:
+        topic = self._tracker.add_topic(name)
+        log.info("тема: %s", topic.name)
+        self._state.set("topic", topic.name)
+        self._data_changed()
+        self._refresh_checklist()
+
+    def _rename_topic(self, old: str, new: str) -> None:
+        topic = self._tracker.update_topic(old, name=new)
+        log.info("тема %s → %s", old, topic.name)
+        if self._state.get("topic") == old:
+            self._state.set("topic", topic.name)
+        self._data_changed()
+        self._refresh_checklist()
+
+    def _remove_topic(self, name: str) -> None:
+        self._tracker.remove_topic(name)
+        log.info("тема удалена: %s", name)
+        if self._state.get("topic") == name:
+            self._state.set("topic", "")
+        self._data_changed()
+        self._refresh_checklist()
+
+    def _change_topic(self, name: str, **changes) -> None:
+        self._tracker.update_topic(name, **changes)
+        self._data_changed()
+        self._refresh_checklist()
+
+    def _move_task(self, key: str, topic: str) -> None:
+        try:
+            self._tracker.move_task(key, topic)
+        except KeyError:
+            log.exception("задачу не перенести")
+            return
+        log.info("задача %s → тема %r", key, topic)
+        self._data_changed()
+        self._refresh_checklist()
 
     def _add_note(self, key: str, text: str) -> None:
         try:
