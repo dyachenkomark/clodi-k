@@ -22,22 +22,35 @@ Google Таблиц. Сервер для этого не нужен.
 
 ## Для разработчика: OAuth-клиент приложения, один раз
 
-1. В [Google Cloud](https://console.cloud.google.com/projectcreate) создайте проект для
-   приложения и включите в нём **Google Sheets API** и **Google Drive API**: Drive нужен,
-   чтобы создать таблицу и найти её на другом компьютере.
-2. **Google Auth Platform → Branding:** имя cloDICK, почта поддержки.
-   **Audience:** External.
-   **Data Access:** добавьте одну область `https://www.googleapis.com/auth/drive.file`.
-3. По [документации Google](https://support.google.com/cloud/answer/13463073) приложению
-   только с несекретными областями, а `drive.file` к ним относится, проверка Google не
-   обязательна. Чтобы на экране согласия были своё имя и логотип, нужна облегчённая проверка
-   бренда. Пока приложение в статусе Testing, входить могут только добавленные тестовые
-   пользователи; для всех переведите его в In production. Как это выглядит на практике,
-   я не проверял.
-4. **Clients → Create client → Desktop app.** Скачайте JSON и сохраните как
-   `src/clodick/assets/google-oauth-client.json` — он попадёт в сборку. Для проверки на
-   своём компьютере можно положить его в папку данных `%LOCALAPPDATA%\cloDICK\`.
-   В репозиторий этот файл не коммитим, он в `.gitignore`.
+Ссылки открывают раздел в проекте, выбранном вверху консоли Google Cloud. Проверьте, что там
+нужный проект.
+
+1. **Включите API**, в каждой ссылке кнопка Enable:
+   [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) и
+   [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com).
+   Drive нужен, чтобы создать таблицу и найти её на другом компьютере.
+2. **Экран согласия:** [Branding](https://console.developers.google.com/auth/branding) —
+   имя cloDICK и почта поддержки. Если раздел ещё не настроен, консоль сама проведёт по шагам,
+   на шаге Audience выберите External.
+3. **Права:** [Data Access](https://console.developers.google.com/auth/scopes) →
+   Add or remove scopes → в поле ручного ввода вставьте
+   `https://www.googleapis.com/auth/drive.file` → Update → Save.
+4. **Кто может входить:** [Audience](https://console.developers.google.com/auth/audience).
+   Пока статус Testing, входят только тестовые пользователи: Add users → своя почта Gmail.
+   Для всех — Publish app. По [документации Google](https://support.google.com/cloud/answer/13463073)
+   приложению только с несекретными областями, а `drive.file` к ним относится, проверка
+   не обязательна. Как это выглядит на практике, я не проверял.
+5. **Клиент:** [Clients](https://console.developers.google.com/auth/clients) → Create client →
+   Application type: **Desktop app** → Create. В появившемся окне сразу нажмите
+   **Download JSON**: секрет клиента потом может быть уже не посмотреть.
+6. **Положите файл** как `google-oauth-client.json`:
+   - в `%LOCALAPPDATA%\cloDICK\` — чтобы работало на этом компьютере;
+   - в `src/clodick/assets/` — чтобы файл попал в сборку для других людей.
+   В репозиторий он не попадёт, он в `.gitignore`.
+7. **Перезапустите клодика** и откройте меню → Setup… → Next. Появится «Sign in with Google».
+
+Если клиент уже есть, но типа Web application, создайте рядом новый типа Desktop app:
+вход из программы на компьютере работает через него.
 
 Токен входа пользователя хранится в папке данных в `google-token.json`.
 
