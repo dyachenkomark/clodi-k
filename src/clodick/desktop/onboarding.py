@@ -266,13 +266,13 @@ class SetupDialog(QWidget):
         self.guide_button.clicked.connect(lambda: self.show_page(GUIDE))
         box.addWidget(self.guide_button)
 
-        self.service_toggle = QPushButton("I have a service account key", objectName="link")
+        self.service_toggle = QPushButton("Use my own key and an existing sheet", objectName="link")
         self.service_toggle.clicked.connect(lambda: self._service_box.setVisible(True))
         box.addWidget(self.service_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
         self._service_box = QWidget()
         service = QVBoxLayout(self._service_box)
         service.setContentsMargins(0, 0, 0, 0)
-        self.key_path = QLineEdit(placeholderText="Key file (.json)")
+        self.key_path = QLineEdit(placeholderText="Token or service account key (.json)")
         browse = QPushButton("…")
         browse.setFixedWidth(34)
         browse.clicked.connect(self._browse)
@@ -280,7 +280,7 @@ class SetupDialog(QWidget):
         key_row.addWidget(self.key_path, 1)
         key_row.addWidget(browse)
         service.addLayout(key_row)
-        self.sheet_link = QLineEdit(placeholderText="Link to the sheet shared with the key")
+        self.sheet_link = QLineEdit(placeholderText="Link to your sheet")
         service.addWidget(self.sheet_link)
         self.service_button = QPushButton("Connect")
         self.service_button.clicked.connect(self._service)
@@ -311,14 +311,14 @@ class SetupDialog(QWidget):
         self.google_requested.emit()
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Service account key", "", "JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Google key or token", "", "JSON (*.json)")
         if path:
             self.key_path.setText(path)
 
     def _service(self) -> None:
         key, link = self.key_path.text().strip(), self.sheet_link.text().strip()
         if not key or not link:
-            self.set_sheet_status("Choose the key file and paste the sheet link.")
+            self.set_sheet_status("Choose the file and paste the link to your sheet.")
             return
         self.set_sheet_status("Connecting…")
         self.service_button.setEnabled(False)

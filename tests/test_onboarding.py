@@ -331,13 +331,15 @@ def test_service_account_path_and_errors(setup_world):
     dialog.show_page(SHEET)
     dialog.service_toggle.click()
     dialog.service_button.click()
-    assert "Choose the key file" in dialog.sheet_status.text()
+    assert "Choose the file" in dialog.sheet_status.text()
 
     def broken(gc, link):
         raise google.SheetsError("No access. Share the sheet with the service account.")
 
     env.open_link = broken
-    dialog.key_path.setText("C:/keys/bot.json")
+    key = env.data_dir / "bot.json"
+    key.write_text(json.dumps({"type": "service_account", "client_email": "bot@x"}), "utf-8")
+    dialog.key_path.setText(str(key))
     dialog.sheet_link.setText("https://docs.google.com/spreadsheets/d/svc456/edit")
     dialog.service_button.click()
     assert "No access" in dialog.sheet_status.text()
@@ -348,8 +350,10 @@ def test_service_account_path_and_errors(setup_world):
     dialog.service_button.click()
     link = desktop._state.get("sheet_link")
     assert (link["mode"], link["spreadsheet_id"], link["key_file"]) == (
-        "service", "svc456", "C:/keys/bot.json",
-    )  # fmt: skip
+        "service",
+        "svc456",
+        str(key),
+    )
 
 
 def test_google_button_hidden_without_oauth_client(setup_world):
@@ -534,3 +538,53 @@ def test_close_button_hides_setup_and_it_does_not_come_back_by_itself(setup_worl
     desktop.setup.close_button.click()
     assert not desktop.setup.isVisible()
     assert desktop._state.get("onboarding_done") is True
+
+
+def test_own_file_field_understands_every_google_file(setup_world):
+    desktop, env, _, _, _ = setup_world
+    env.oauth_client = None
+    desktop.open_setup()
+    dialog = desktop.setup
+    dialog.show_page(SHEET)
+    dialog.sheet_link.setText("https://docs.google.com/spreadsheets/d/mine/edit")
+
+    def choose(name, data):
+        path = env.data_dir / name
+        path.write_text(json.dumps(data), encoding="utf-8")
+        dialog.key_path.setText(str(path))
+        dialog.service_button.click()
+        return dialog.sheet_status.text()
+
+    # Файл клиента для входа: сохранить и показать кнопку входа.
+    text = choose("client_secret_x.json", DESKTOP_CLIENT)
+    assert "Sign in with Google" in text
+    assert env.oauth_client == env.data_dir / "google-oauth-client.json"
+    assert dialog.google_button.isVisibleTo(dialog)
+
+    assert "for a website" in choose("web.json", {"web": {"client_id": "x"}})
+    assert "not a Google key" in choose("junk.json", {"hello": 1})
+    assert desktop._state.get("sheet_link") is None
+
+    # Готовый токен с правами на таблицы: подключить существующую таблицу по ссылке.
+    token = {"client_id": "c", "client_secret": "s", "refresh_token": "r",
+             "scopes": ["https://www.googleapis.com/auth/spreadsheets"]}  # fmt: skip
+    choose("google_token.json", token)
+    link = desktop._state.get("sheet_link")
+    imported = env.data_dir / "google-token-imported.json"
+    assert (link["mode"], link["key_file"]) == ("oauth", str(imported))
+    assert json.loads(imported.read_text(encoding="utf-8"))["refresh_token"] == "r"
+
+
+def test_key_kinds(tmp_path):
+    cases = {
+        google.SERVICE_ACCOUNT: {"type": "service_account", "client_email": "a@b"},
+        google.OAUTH_CLIENT: DESKTOP_CLIENT,
+        google.WEB_CLIENT: {"web": {"client_id": "x"}},
+        google.TOKEN: {"client_id": "c", "refresh_token": "r"},
+        google.UNKNOWN: [1, 2],
+    }
+    for kind, data in cases.items():
+        path = tmp_path / f"{kind}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        assert google.key_kind(path) == kind
+    assert google.key_kind(tmp_path / "missing.json") == google.UNKNOWN

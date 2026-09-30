@@ -75,6 +75,41 @@ def oauth_client_file(data_dir: Path) -> Path | None:
     return None
 
 
+# Какие бывают JSON-файлы Google и что клодик с ними делает.
+SERVICE_ACCOUNT, OAUTH_CLIENT, WEB_CLIENT, TOKEN, UNKNOWN = (
+    "service_account", "oauth_client", "web_client", "token", "unknown",
+)  # fmt: skip
+IMPORTED_TOKEN_NAME = "google-token-imported.json"
+
+
+def key_kind(path: Path) -> str:
+    """Что за файл выбрал человек: ключ сервисного аккаунта, клиент для входа, токен."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return UNKNOWN
+    if not isinstance(data, dict):
+        return UNKNOWN
+    if data.get("type") == "service_account" and data.get("client_email"):
+        return SERVICE_ACCOUNT
+    if isinstance(data.get("installed"), dict):
+        return OAUTH_CLIENT
+    if isinstance(data.get("web"), dict):
+        return WEB_CLIENT
+    if data.get("refresh_token") and data.get("client_id"):
+        return TOKEN
+    return UNKNOWN
+
+
+def import_token(source: Path, data_dir: Path) -> Path:
+    """Скопировать готовый токен входа в папку данных: ссылка на чужую папку может пропасть."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / IMPORTED_TOKEN_NAME
+    if source.resolve() != target.resolve():
+        target.write_bytes(source.read_bytes())
+    return target
+
+
 def check_oauth_client(path: Path) -> dict:
     """Проверить скачанный файл клиента. Ошибки — простыми словами для человека."""
     try:
@@ -140,7 +175,9 @@ def authorize(link: SheetLink):
     from google.oauth2.credentials import Credentials
 
     try:
-        creds = Credentials.from_authorized_user_file(str(key), OAUTH_SCOPES)
+        # Права берём из самого токена: у своего входа это drive.file, у готового токена
+        # может быть spreadsheets. Подменять их нельзя: Google откажет при продлении.
+        creds = Credentials.from_authorized_user_file(str(key))
     except ValueError as exc:
         raise SheetsError("Google sign-in is broken. Open Setup and sign in again.") from exc
     return gspread.authorize(creds)

@@ -686,12 +686,42 @@ class DesktopApp(QObject):
         self._background(work, self._sheet_linked)
 
     def _setup_service(self, key_file: str, sheet: str) -> None:
+        """Свой файл и существующая таблица. Файл бывает трёх видов, поступаем по-разному."""
         env = self._env
+        path = Path(key_file)
+        kind = google.key_kind(path)
+        if kind == google.OAUTH_CLIENT:
+            self._install_client(path)
+            self.setup.set_sheet_status(
+                "This file is for «Sign in with Google», not for this field. I've saved it: "
+                "press the orange button above. Sign-in makes a new sheet «cloDICK». "
+                "For an existing sheet, choose a token or a service account key here.",
+                False,
+            )
+            return
+        if kind == google.WEB_CLIENT:
+            self.setup.set_sheet_status(
+                "This key is for a website. In Google Cloud create one with type Desktop app.",
+                False,
+            )
+            return
+        if kind == google.UNKNOWN:
+            self.setup.set_sheet_status(
+                f"{path.name} is not a Google key. Choose a token (it has refresh_token inside) "
+                "or a service account key.",
+                False,
+            )
+            return
+        if kind == google.TOKEN:
+            path = google.import_token(path, env.data_dir)
+            mode = "oauth"
+        else:
+            mode = "service"
 
         def work():
-            gc = env.authorize(google.SheetLink("service", "-", key_file))
+            gc = env.authorize(google.SheetLink(mode, "-", str(path)))
             sheet_id, url = env.open_link(gc, sheet)
-            return google.SheetLink("service", sheet_id, key_file, url)
+            return google.SheetLink(mode, sheet_id, str(path), url)
 
         self._background(work, self._sheet_linked)
 
