@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date
 
@@ -20,11 +21,21 @@ log = logging.getLogger(__name__)
 
 KEYRING_SERVICE = "cloDICK"
 KEYRING_USER = "llm-api-key"
-TIMEOUT_SECONDS = 60
+# Соединиться — быстро; а ответ модель после пробуждения может готовить долго.
+TIMEOUT = (15, 180)
+# Свой сервер может спать. Пока просыпается, он не принимает соединение или прокси
+# отвечает 502/503/504. Столько ждём, повторяя попытку раз в RETRY_SECONDS.
+WAKE_SECONDS = 300
+RETRY_SECONDS = 5
+WAKING_CODES = (502, 503, 504)
 
 
 class LLMError(Exception):
     """Модель недоступна или ответила не так. Текст понятен человеку."""
+
+
+class LLMAsleep(LLMError):
+    """Сервер не ответил и за время ожидания не проснулся. Ключ и адрес при этом не проверены."""
 
 
 class ModelGone(LLMError):
@@ -77,12 +88,23 @@ def save_key(key: str) -> None:
 
 class LLMClient:
     def __init__(
-        self, settings: LLMSettings, api_key: str = "", post=requests.post, get=requests.get
+        self,
+        settings: LLMSettings,
+        api_key: str = "",
+        post=requests.post,
+        get=requests.get,
+        *,
+        wake_seconds: float = WAKE_SECONDS,
+        sleep=time.sleep,
+        clock=time.monotonic,
     ) -> None:
         self.settings = settings
         self._key = api_key
         self._post = post
         self._get = get
+        self._wake_seconds = wake_seconds
+        self._sleep = sleep
+        self._clock = clock
         # Модель, которую сервер отдаёт сейчас, если в настройках она не закреплена.
         self._resolved: str | None = None
 
@@ -90,12 +112,12 @@ class LLMClient:
     def auto(self) -> bool:
         return not self.settings.model
 
-    def model_name(self, refresh: bool = False) -> str:
+    def model_name(self, refresh: bool = False, on_wait=None) -> str:
         """Имя модели для запроса: закреплённое или то, что сейчас стоит на сервере."""
         if self.settings.model:
             return self.settings.model
         if refresh or self._resolved is None:
-            models = self.list_models()
+            models = self.list_models(on_wait)
             if not models:
                 raise LLMError("The server has no models loaded.")
             self._resolved = pick_model(models)
@@ -107,13 +129,36 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self._key}"
         return headers
 
-    def list_models(self) -> list[str]:
+    def _send(self, send, url: str, on_wait=None, **kwargs):
+        """Запрос с терпением: спящий сервер будим повторами, пока не выйдет wake_seconds.
+
+        on_wait(секунды) зовётся перед каждой новой попыткой — показать человеку, что ждём.
+        """
+        start = self._clock()
+        while True:
+            try:
+                response = send(url, headers=self._headers(), timeout=TIMEOUT, **kwargs)
+            except requests.RequestException as exc:
+                problem = type(exc).__name__
+            else:
+                if response.status_code not in WAKING_CODES:
+                    return response
+                problem = f"HTTP {response.status_code}"
+            waited = self._clock() - start
+            if waited >= self._wake_seconds:
+                minutes = f" in {self._wake_seconds / 60:g} min" if self._wake_seconds else ""
+                raise LLMAsleep(
+                    f"Cannot reach {self.settings.base_url}: it didn't wake up{minutes} "
+                    f"({problem}). Try again later."
+                )
+            log.info("сервер модели не отвечает (%s), ждём %.0f с", problem, waited)
+            if on_wait is not None:
+                on_wait(int(waited))
+            self._sleep(RETRY_SECONDS)
+
+    def list_models(self, on_wait=None) -> list[str]:
         """Какие модели есть на сервере: GET /models, так умеют vLLM, Ollama и LM Studio."""
-        url = f"{self.settings.base_url}/models"
-        try:
-            response = self._get(url, headers=self._headers(), timeout=TIMEOUT_SECONDS)
-        except requests.RequestException as exc:
-            raise LLMError(f"Cannot reach {self.settings.base_url}: {exc}") from exc
+        response = self._send(self._get, f"{self.settings.base_url}/models", on_wait)
         if response.status_code in (401, 403):
             raise LLMError("The API key was rejected.")
         if response.status_code >= 400:
@@ -126,9 +171,9 @@ class LLMClient:
         except (ValueError, KeyError, TypeError) as exc:
             raise LLMError("The server answered, but not with a list of models.") from exc
 
-    def chat(self, system: str, user: str, max_tokens: int = 300) -> str:
+    def chat(self, system: str, user: str, max_tokens: int = 300, on_wait=None) -> str:
         try:
-            return self._chat(self.model_name(), system, user, max_tokens)
+            return self._chat(self.model_name(on_wait=on_wait), system, user, max_tokens, on_wait)
         except ModelGone:
             if not self.auto:
                 raise LLMError(
@@ -136,10 +181,10 @@ class LLMClient:
                     "Clear the model field in Setup, and I'll follow the server."
                 ) from None
             # На сервере сменили модель: перечитать список и повторить один раз.
-            return self._chat(self.model_name(refresh=True), system, user, max_tokens)
+            model = self.model_name(refresh=True, on_wait=on_wait)
+            return self._chat(model, system, user, max_tokens, on_wait)
 
-    def _chat(self, model: str, system: str, user: str, max_tokens: int) -> str:
-        headers = self._headers()
+    def _chat(self, model: str, system: str, user: str, max_tokens: int, on_wait=None) -> str:
         body = {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -147,10 +192,7 @@ class LLMClient:
             "temperature": 0.4,
         }
         url = f"{self.settings.base_url}/chat/completions"
-        try:
-            response = self._post(url, json=body, headers=headers, timeout=TIMEOUT_SECONDS)
-        except requests.RequestException as exc:
-            raise LLMError(f"Cannot reach {self.settings.base_url}: {exc}") from exc
+        response = self._send(self._post, url, on_wait, json=body)
         if response.status_code in (401, 403):
             raise LLMError("The API key was rejected.")
         if response.status_code in (400, 404) and "model" in response.text.casefold():
@@ -165,9 +207,11 @@ class LLMClient:
             raise LLMError("The answer is not in the OpenAI chat format.") from exc
         return strip_thinking(text or "").strip()
 
-    def check(self) -> str:
+    def check(self, on_wait=None) -> str:
         """Проверка подключения: короткий ответ модели."""
-        return self.chat("You are a connection test.", "Reply with the single word: OK", 10)
+        return self.chat(
+            "You are a connection test.", "Reply with the single word: OK", 10, on_wait
+        )
 
 
 def pick_model(models: list[str]) -> str:
@@ -232,5 +276,7 @@ def _describe(item, today: date) -> str:
     return ", ".join(parts) or "no deadline"
 
 
-def plan_day(client: LLMClient, status: DayStatus, open_tasks: list[Task], now_text: str) -> str:
-    return client.chat(PLAN_SYSTEM, day_context(status, open_tasks, now_text), 220)
+def plan_day(
+    client: LLMClient, status: DayStatus, open_tasks: list[Task], now_text: str, on_wait=None
+) -> str:
+    return client.chat(PLAN_SYSTEM, day_context(status, open_tasks, now_text), 220, on_wait)

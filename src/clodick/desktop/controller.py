@@ -130,6 +130,12 @@ class _Job(QObject):
     done = Signal(object, object)
 
 
+class _Relay(QObject):
+    """Выполнить функцию в потоке интерфейса: для новостей из фоновой работы."""
+
+    call = Signal(object)
+
+
 class DesktopApp(QObject):
     def __init__(
         self,
@@ -163,6 +169,8 @@ class DesktopApp(QObject):
         self._jobs: set[_Job] = set()
         # Тесты ставят True: фоновая работа выполняется сразу, без потоков.
         self.inline_jobs = False
+        self._relay = _Relay()
+        self._relay.call.connect(lambda fn: fn(), Qt.ConnectionType.QueuedConnection)
         self._llm = self._load_llm(state)
         self._rng = rng or random.Random()
         self._scale = config.desktop.scale
@@ -561,6 +569,13 @@ class DesktopApp(QObject):
         status, tasks = self._tracker.status(), self._tracker.open_tasks()
         now_text = self._clock().strftime("%A %d %B %Y, %H:%M")
         client = self._llm
+        told = []
+
+        def waiting(seconds: int) -> None:
+            """Сервер спит: сказать один раз, что будим, а не молчать минутами."""
+            if not quiet and not told:
+                told.append(seconds)
+                self._on_ui(lambda: self.say("The model is waking up, give me a minute…", 8))
 
         def done(text, error) -> None:
             if error is not None:
@@ -577,9 +592,16 @@ class DesktopApp(QObject):
 
         if not quiet:
             self.say("Let me think…", 4, wave=False)
-        self._background(lambda: llm.plan_day(client, status, tasks, now_text), done)
+        self._background(lambda: llm.plan_day(client, status, tasks, now_text, waiting), done)
 
     # --- мастер настройки ---
+
+    def _on_ui(self, fn: Callable) -> None:
+        """fn() в потоке интерфейса; можно звать из фоновой работы."""
+        if self.inline_jobs:
+            fn()
+        else:
+            self._relay.call.emit(fn)
 
     def _background(self, work: Callable, on_done: Callable) -> None:
         """work() в отдельном потоке, on_done(результат, ошибка) — в потоке интерфейса."""
@@ -750,19 +772,33 @@ class DesktopApp(QObject):
         key = key.strip() or self._env.load_key()
         env = self._env
 
+        settings = llm.LLMSettings(base_url, model.strip())
+
+        def waiting(seconds: int) -> None:
+            text = f"The server is asleep, waking it up… {seconds} s (up to 5 min)"
+            self._on_ui(lambda: self.setup.set_llm_status(text))
+
         def work():
             """Короткий вопрос модели. Модель не указана — следуем за сервером."""
-            client = env.llm_client(llm.LLMSettings(base_url, model.strip()), key)
-            answer = client.check()
-            models = client.list_models() if client.auto else []
+            client = env.llm_client(settings, key)
+            answer = client.check(waiting)
+            models = client.list_models(waiting) if client.auto else []
             return client, models, answer
 
         def done(result, error) -> None:
+            if save and isinstance(error, llm.LLMAsleep):
+                # Сервер спит — это не ошибка настройки: сохранить и спросить позже.
+                self._save_llm(settings, key)
+                self.setup.set_llm_status(
+                    "Saved. The server is still asleep, I'll ask it again when you need a plan.",
+                    True,
+                )
+                self.setup.show_page(DONE)
+                return
             if error is not None:
                 self.setup.set_llm_status(f"Didn't work: {error}", False)
                 return
             client, models, answer = result
-            settings = client.settings
             if models:
                 self.setup.set_models(models, settings.model)
             follow = " If the server switches models, I'll follow." if client.auto else ""
@@ -771,15 +807,18 @@ class DesktopApp(QObject):
                     f"{client.model_name()} answered: {answer[:30]}.{follow}", True
                 )
                 return
-            if key:
-                self._env.save_key(key)
-            self._state.set("llm", settings.to_dict())
-            self._llm = client
-            log.info("модель подключена: %s %s", settings.base_url, settings.model or "авто")
+            self._save_llm(settings, key, client)
             self.setup.set_llm_status(f"Saved. I'll use it for plans.{follow}", True)
             self.setup.show_page(DONE)
 
         self._background(work, done)
+
+    def _save_llm(self, settings, key: str, client=None) -> None:
+        if key:
+            self._env.save_key(key)
+        self._state.set("llm", settings.to_dict())
+        self._llm = client or self._env.llm_client(settings, key)
+        log.info("модель подключена: %s %s", settings.base_url, settings.model or "авто")
 
     def _setup_closed(self) -> None:
         """Закрыли крестиком: больше не открываться само, вернуть можно из меню."""

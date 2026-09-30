@@ -88,9 +88,72 @@ def test_llm_client_explains_network_errors():
     def post(*args, **kwargs):
         raise requests.ConnectionError("refused")
 
-    client = llm.LLMClient(llm.LLMSettings("http://x/v1", "m"), post=post)
-    with pytest.raises(llm.LLMError, match="Cannot reach http://x/v1"):
+    client = llm.LLMClient(llm.LLMSettings("http://x/v1", "m"), post=post, wake_seconds=0)
+    with pytest.raises(llm.LLMAsleep, match=r"Cannot reach http://x/v1.*ConnectionError"):
         client.check()
+
+
+class Clock:
+    """Часы для тестов: время идёт только когда клиент «спит» между попытками."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_sleeping_server_is_woken_up_by_retries():
+    import requests
+
+    clock, waits = Clock(), []
+    replies = [requests.ConnectTimeout("asleep"), FakeResponse(503), answer("OK")]
+
+    def post(*args, **kwargs):
+        reply = replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    client = llm.LLMClient(
+        llm.LLMSettings("http://x/v1", "m"), post=post, sleep=clock.sleep, clock=clock
+    )
+    assert client.check(on_wait=waits.append) == "OK"
+    assert waits == [0, llm.RETRY_SECONDS]  # человеку показывали, сколько уже ждём
+
+
+def test_server_that_never_wakes_up_gives_up_after_the_limit():
+    import requests
+
+    clock, tries = Clock(), []
+
+    def get(*args, **kwargs):
+        tries.append(clock.now)
+        raise requests.ConnectTimeout("asleep")
+
+    client = llm.LLMClient(
+        llm.LLMSettings("http://x/v1"), get=get, wake_seconds=60, sleep=clock.sleep, clock=clock
+    )
+    with pytest.raises(llm.LLMAsleep, match="didn't wake up in 1 min"):
+        client.list_models()
+    assert tries[-1] == 60
+    assert len(tries) == 60 // llm.RETRY_SECONDS + 1
+
+
+def test_rejected_key_is_not_retried():
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        return FakeResponse(401)
+
+    client = llm.LLMClient(llm.LLMSettings("http://x/v1", "m"), post=post)
+    with pytest.raises(llm.LLMError, match="rejected"):
+        client.check()
+    assert len(calls) == 1
 
 
 def test_day_context_holds_the_facts_for_the_model():
@@ -219,6 +282,7 @@ class FakeLLM:
     """Клиент модели без сети. На «сервере» сейчас SERVER_MODELS."""
 
     fail = False
+    asleep = False  # сервер спит и не просыпается
     SERVER_MODELS = ("gemma-3-12b-it",)
 
     def __init__(self, settings, key=""):
@@ -228,20 +292,25 @@ class FakeLLM:
     def auto(self):
         return not self.settings.model
 
-    def list_models(self):
+    def list_models(self, on_wait=None):
         return list(FakeLLM.SERVER_MODELS)
 
     def model_name(self):
         return self.settings.model or llm.pick_model(self.list_models())
 
-    def check(self):
+    def _call(self, on_wait):
+        if FakeLLM.asleep:
+            on_wait(5)
+            raise llm.LLMAsleep("Cannot reach the box: it didn't wake up")
         if FakeLLM.fail:
             raise llm.LLMError("Cannot reach the box")
+
+    def check(self, on_wait=None):
+        self._call(on_wait)
         return "OK"
 
-    def chat(self, system, user, max_tokens=300):
-        if FakeLLM.fail:
-            raise llm.LLMError("Cannot reach the box")
+    def chat(self, system, user, max_tokens=300, on_wait=None):
+        self._call(on_wait)
         return "Start with the overdue login fix, then the report."
 
 
@@ -253,6 +322,7 @@ def qapp():
 @pytest.fixture
 def setup_world(qapp, config, repo, tmp_path):
     FakeLLM.fail = False
+    FakeLLM.asleep = False
     keys = {}
     signed = {}
 
@@ -394,6 +464,44 @@ def test_model_errors_are_shown_and_nothing_is_saved(setup_world):
     assert "Cannot reach the box" in dialog.llm_status.text()
     assert desktop._state.get("llm") is None
     assert keys == {}
+
+
+def test_sleeping_server_check_shows_waiting_and_save_still_keeps_it(setup_world):
+    desktop, _, _, keys, _ = setup_world
+    FakeLLM.asleep = True
+    shown = []
+    desktop.open_setup()
+    dialog = desktop.setup
+    real = dialog.set_llm_status
+    dialog.set_llm_status = lambda text, ok=None: (shown.append(text), real(text, ok))
+    dialog.show_page(MODEL)
+    dialog.llm_url.setText("https://box/v1")
+    dialog.llm_key.setText("secret")
+
+    dialog.llm_check.click()
+    assert any("waking it up… 5 s" in text for text in shown)
+    assert "didn't wake up" in shown[-1]
+    assert desktop._state.get("llm") is None
+
+    dialog.llm_save.click()  # спит — не значит «неверно»: сохраняем
+    assert "still asleep" in shown[-1]
+    assert desktop._state.get("llm") == {"base_url": "https://box/v1", "model": ""}
+    assert keys["llm"] == "secret"
+    assert desktop._llm is not None
+
+    desktop.plan_my_day()
+    assert desktop.bubble.text.startswith("I couldn't reach the model")
+
+
+def test_plan_my_day_says_it_waits_for_a_sleeping_model(setup_world):
+    desktop, _, _, _, _ = setup_world
+    desktop._state.set("llm", {"base_url": "http://box/v1", "model": ""})
+    desktop._llm = FakeLLM(llm.LLMSettings("http://box/v1"))
+    said = []
+    desktop.say = lambda text, *args, **kwargs: said.append(text)
+    FakeLLM.asleep = True
+    desktop.plan_my_day()
+    assert said[:2] == ["Let me think…", "The model is waking up, give me a minute…"]
 
 
 def test_plan_my_day_uses_the_model_and_falls_back(setup_world):

@@ -384,7 +384,7 @@ class SetupDialog(QWidget):
         if not url:
             self.set_llm_status("Fill in the address of the API.", False)
             return
-        self.set_llm_status("Asking the server…")
+        self.set_llm_status("Asking the server… If it's asleep, I'll wait for it to wake up.")
         self.llm_check.setEnabled(False)
         self.llm_save.setEnabled(False)
         signal.emit(url, model, self.llm_key.text())
