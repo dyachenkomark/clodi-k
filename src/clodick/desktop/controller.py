@@ -772,13 +772,7 @@ class DesktopApp(QObject):
         path = Path(key_file)
         kind = google.key_kind(path)
         if kind == google.OAUTH_CLIENT:
-            self._install_client(path)
-            self.setup.set_sheet_status(
-                "This file is for «Sign in with Google», not for this field. I've saved it: "
-                "press the orange button above. Sign-in makes a new sheet «cloDICK». "
-                "For an existing sheet, choose a token or a service account key here.",
-                False,
-            )
+            self._client_and_sheet(path, sheet)
             return
         if kind == google.WEB_CLIENT:
             self.setup.set_sheet_status(
@@ -803,6 +797,30 @@ class DesktopApp(QObject):
             gc = env.authorize(google.SheetLink(mode, "-", str(path)))
             sheet_id, url = env.open_link(gc, sheet)
             return google.SheetLink(mode, sheet_id, str(path), url)
+
+        self._background(work, self._sheet_linked)
+
+    def _client_and_sheet(self, path: Path, sheet: str) -> None:
+        """Свой клиент из Google Cloud и ссылка на таблицу: войти и открыть именно её."""
+        env = self._env
+        try:
+            client = google.install_oauth_client(path, env.data_dir)
+        except google.SheetsError as exc:
+            self.setup.set_sheet_status(str(exc), False)
+            return
+        env.oauth_client = client
+        self.setup.set_google_available(True)
+        self.setup.set_sheet_status(
+            "A browser tab opens: choose your account and allow access to your sheets. "
+            "If Google says the app isn't verified, that's your own app: press Advanced, "
+            "then Go to it."
+        )
+        token = env.data_dir / google.TOKEN_NAME
+
+        def work():
+            gc = env.sign_in(client, token, scopes=google.SHEETS_SCOPES)
+            sheet_id, url = env.open_link(gc, sheet)
+            return google.SheetLink("oauth", sheet_id, str(token), url)
 
         self._background(work, self._sheet_linked)
 

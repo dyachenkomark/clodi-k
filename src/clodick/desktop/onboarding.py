@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
@@ -195,6 +197,8 @@ class SetupDialog(QWidget):
         self._moved = False
         self._drag_offset = None
         self.pick_buttons: dict[str, QToolButton] = {}
+        # Строки с переносами, высоту которых меряем шрифтом сами (см. _fit).
+        self._step_labels: list[QLabel] = []
         self._build_hello()
         self._build_sheet()
         self._build_model()
@@ -278,13 +282,32 @@ class SetupDialog(QWidget):
         self.guide_button.clicked.connect(lambda: self.show_page(GUIDE))
         box.addWidget(self.guide_button)
 
-        self.service_toggle = QPushButton("Use my own key and an existing sheet", objectName="link")
-        self.service_toggle.clicked.connect(lambda: self._service_box.setVisible(True))
+        self.service_toggle = QPushButton("Connect a sheet I already have", objectName="link")
+        self.service_toggle.clicked.connect(self._show_service_box)
         box.addWidget(self.service_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
         self._service_box = QWidget()
         service = QVBoxLayout(self._service_box)
         service.setContentsMargins(0, 0, 0, 0)
-        self.key_path = QLineEdit(placeholderText="Token or service account key (.json)")
+        where = QLabel(
+            "1. In Google Cloud open Clients, press «Create client», choose Desktop app, "
+            "press Create and then Download JSON.\n"
+            "2. Choose that file below (its name starts with client_secret) and paste the "
+            "link to your sheet. A token or a service account key works here too.",
+            objectName="steptext",
+            wordWrap=True,
+        )
+        # Ширина текста: страница минус место под полосу прокрутки.
+        where.setFixedWidth(self.WIDTH - 32 - 14)
+        self._step_labels.append(where)
+        service.addWidget(where)
+        self.clients_open = QPushButton("Open Clients", objectName="small")
+        self.clients_open.clicked.connect(
+            lambda: self.open_url_requested.emit(
+                "https://console.developers.google.com/auth/clients"
+            )
+        )
+        service.addLayout(self._row(self.clients_open))
+        self.key_path = QLineEdit(placeholderText="The JSON file from Google Cloud")
         browse = QPushButton("…")
         browse.setFixedWidth(34)
         browse.clicked.connect(self._browse)
@@ -312,6 +335,10 @@ class SetupDialog(QWidget):
         self.sheet_next.hide()
         box.addLayout(self._row(self.sheet_skip, self.sheet_next))
 
+    def _show_service_box(self) -> None:
+        self._service_box.show()
+        self._fit()
+
     def set_google_available(self, available: bool) -> None:
         self.google_button.setVisible(available)
         self.no_google.setVisible(not available)
@@ -323,7 +350,10 @@ class SetupDialog(QWidget):
         self.google_requested.emit()
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Google key or token", "", "JSON (*.json)")
+        downloads = str(Path.home() / "Downloads")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "The JSON from Google", downloads, "JSON (*.json)"
+        )
         if path:
             self.key_path.setText(path)
 
@@ -468,7 +498,6 @@ class SetupDialog(QWidget):
             "the right page. Sign in there with your usual Google account.",
         )
         self.guide_open: list[QPushButton] = []
-        self._step_labels: list[QLabel] = []
         # Точная ширина текста: иначе Qt неверно считает высоту строк с переносами
         # и последняя строка шага обрезается.
         # Минус отступы, номер, кнопка и место под полосу прокрутки на низком экране.

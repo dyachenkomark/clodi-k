@@ -327,8 +327,9 @@ def setup_world(qapp, config, repo, tmp_path):
     keys = {}
     signed = {}
 
-    def sign_in(client_file, token):
+    def sign_in(client_file, token, scopes=None):
         signed["token"] = token
+        signed["scopes"] = scopes
         return "gc"
 
     env = SetupEnv(
@@ -666,7 +667,7 @@ def test_close_button_hides_setup_and_it_does_not_come_back_by_itself(setup_worl
 
 
 def test_own_file_field_understands_every_google_file(setup_world):
-    desktop, env, _, _, _ = setup_world
+    desktop, env, _, _, signed = setup_world
     env.oauth_client = None
     desktop.open_setup()
     dialog = desktop.setup
@@ -680,15 +681,22 @@ def test_own_file_field_understands_every_google_file(setup_world):
         dialog.service_button.click()
         return dialog.sheet_status.text()
 
-    # Файл клиента для входа: сохранить и показать кнопку входа.
-    text = choose("client_secret_x.json", DESKTOP_CLIENT)
-    assert "Sign in with Google" in text
-    assert env.oauth_client == env.data_dir / "google-oauth-client.json"
-    assert dialog.google_button.isVisibleTo(dialog)
-
     assert "for a website" in choose("web.json", {"web": {"client_id": "x"}})
     assert "not a Google key" in choose("junk.json", {"hello": 1})
     assert desktop._state.get("sheet_link") is None
+
+    # Свой клиент из Google Cloud и ссылка: вход с правами на таблицы, та самая таблица.
+    choose("client_secret_x.json", DESKTOP_CLIENT)
+    assert env.oauth_client == env.data_dir / "google-oauth-client.json"
+    assert signed["scopes"] == google.SHEETS_SCOPES
+    link = desktop._state.get("sheet_link")
+    token = env.data_dir / "google-token.json"
+    assert (link["mode"], link["spreadsheet_id"], link["key_file"]) == (
+        "oauth",
+        "svc456",
+        str(token),
+    )
+    assert "Connected" in dialog.sheet_status.text()
 
     # Готовый токен с правами на таблицы: подключить существующую таблицу по ссылке.
     token = {"client_id": "c", "client_secret": "s", "refresh_token": "r",

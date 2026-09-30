@@ -20,6 +20,9 @@ from pathlib import Path
 TIMEOUT_SECONDS = 20
 # Только файлы, созданные самим клодиком. Google относит эти права к несекретным.
 OAUTH_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+# Свой клиент и уже существующая таблица по ссылке: drive.file её не увидит,
+# нужны права на таблицы. Даёт их человек сам себе, в своём приложении Google Cloud.
+SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEET_TITLE = "cloDICK"
 # Файл OAuth-клиента приложения: в пакете (его кладёт разработчик) или в папке данных.
 OAUTH_CLIENT_NAME = "google-oauth-client.json"
@@ -202,10 +205,16 @@ def authorize(link: SheetLink):
     return gspread.authorize(creds)
 
 
-def sign_in(client_file: Path, token_file: Path, flow: Callable | None = None):
+def sign_in(
+    client_file: Path,
+    token_file: Path,
+    flow: Callable | None = None,
+    scopes: list[str] | None = None,
+):
     """Вход через Google в браузере. Возвращает gspread-клиент, токен сохраняется в token_file.
 
     flow — для тестов: функция (client_config, scopes) → Credentials.
+    scopes — какие права просить; по умолчанию только свои файлы (OAUTH_SCOPES).
     """
     gspread = _gspread()
     flow = flow or browser_flow()
@@ -213,7 +222,7 @@ def sign_in(client_file: Path, token_file: Path, flow: Callable | None = None):
         config = json.loads(client_file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SheetsError(f"Broken OAuth client file: {client_file}") from exc
-    creds = flow(config, OAUTH_SCOPES)
+    creds = flow(config, list(scopes or OAUTH_SCOPES))
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(creds.to_json(), encoding="utf-8")
     return gspread.authorize(creds)
