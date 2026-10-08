@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
@@ -29,6 +29,7 @@ from clodick.core.reminders import (
     timed_text,
 )
 from clodick.core.tracker import Tracker
+from clodick.desktop import autostart
 from clodick.desktop.actions import ACTIONS, TASK_LINES, TASK_REACTION_POOL, TASK_REACTIONS
 from clodick.desktop.art import GROUND_ROW, YARD_X
 from clodick.desktop.brain import (
@@ -45,6 +46,7 @@ from clodick.desktop.brain import (
     Brain,
     Mode,
 )
+from clodick.desktop.idle import idle_seconds
 from clodick.desktop.onboarding import DONE, HELLO, RECONNECT, SHEET, SetupDialog
 from clodick.desktop.sprites import SpriteBook
 from clodick.desktop.themes import THEMES
@@ -80,6 +82,17 @@ HOP = (1, 2, 3, 3, 2, 1, 0)
 HOP_FRAME_MS = 40
 # Ночью, с NIGHT_FROM до NIGHT_TO часов, енот сонный.
 NIGHT_FROM, NIGHT_TO = 23, 6
+# Разминка: после часа за компьютером — встать и подвигаться. Пять минут без мыши
+# и клавиатуры значат, что человек вставал: отсчёт начинается заново.
+MOVE_EVERY = timedelta(minutes=60)
+MOVE_IDLE_RESET_SECONDS = 5 * 60
+MOVE_LINES = (
+    "An hour at the desk. Time to stand up and stretch!",
+    "Stand up, roll your shoulders, walk around for a minute.",
+    "Raccoon break! Get up and move a little.",
+    "Your back says hi. Stand up for a couple of minutes?",
+    "Time to move: stand up, stretch, drink some water.",
+)
 # Курсор ближе этого к центру енота — он на него косится.
 LOOK_RADIUS = 220
 # Болтовня: реплика раз в столько минут, и шанс сказать что-то, начиная действие.
@@ -154,6 +167,7 @@ class DesktopApp(QObject):
         sync=None,
         sync_factory: Callable | None = None,
         setup_env: SetupEnv | None = None,
+        idle_reader: Callable[[], float] = idle_seconds,
     ) -> None:
         super().__init__()
         self._app = app
@@ -163,6 +177,9 @@ class DesktopApp(QObject):
         self._read_ram = ram_reader
         self._clock = clock
         self._cursor = cursor
+        self._read_idle = idle_reader
+        # С какого момента человек сидит за компьютером без перерыва.
+        self._sitting_since = clock()
         # Фоновая синхронизация с Google Таблицей (sync.worker.SheetSync) или None.
         self.sync = sync
         # Как запустить синхронизацию, когда таблицу подключили в мастере: link → SheetSync.
@@ -214,6 +231,7 @@ class DesktopApp(QObject):
         self._pet_ready = 0.0
         self._hop: list[int] = []
         self._chatty = bool(state.get("chatty", True))
+        self._move_on = bool(state.get("move_breaks", True))
         self._next_chat = time.monotonic() + self._chat_delay()
         self._still_since: float | None = None
         self._curious_ready = 0.0
@@ -987,6 +1005,7 @@ class DesktopApp(QObject):
         self.say("Nice to meet you! Click me whenever you need today's list.", 8)
 
     def _check_reminders(self) -> None:
+        self._check_move()
         due = self._reminder_clock.check(self._clock())
         if self.pomodoro.phase is Phase.FOCUS:
             return  # во время фокуса енот молчит
@@ -1000,6 +1019,42 @@ class DesktopApp(QObject):
         if text:
             log.info("напоминание: %s", text)
             self.say(text)
+
+    def _check_move(self) -> None:
+        """Час за компьютером без перерыва — позвать встать и подвигаться."""
+        now = self._clock()
+        if self._read_idle() >= MOVE_IDLE_RESET_SECONDS or self.pomodoro.phase is Phase.BREAK:
+            self._sitting_since = now  # вставал или отдыхает по Pomodoro
+            return
+        if not self._move_on or self.pomodoro.phase is Phase.FOCUS:
+            return  # в фокусе не отвлекаем: позовём, когда он закончится
+        if now.hour >= NIGHT_FROM or now.hour < NIGHT_TO:
+            return
+        if now - self._sitting_since < MOVE_EVERY:
+            return
+        self._sitting_since = now
+        log.info("разминка: пора встать")
+        self.say(self._rng.choice(MOVE_LINES), seconds=10)
+        if "stretch" in self.character.animations:
+            self.brain.act("stretch", max(ACTIONS["stretch"].seconds))
+            self._after_brain_change()
+
+    def set_move_breaks(self, on: bool) -> None:
+        self._state.set("move_breaks", on)
+        self._move_on = on
+        self._sitting_since = self._clock()
+        self._move_action.setChecked(on)
+
+    def set_autostart(self, on: bool) -> None:
+        try:
+            autostart.set_enabled(on)
+        except OSError:
+            log.exception("автозапуск не поменялся")
+        enabled = autostart.is_enabled()
+        log.info("автозапуск: %s", enabled)
+        self._autostart_action.blockSignals(True)
+        self._autostart_action.setChecked(enabled)
+        self._autostart_action.blockSignals(False)
 
     def _check_timed(self) -> bool:
         """Задачи со временем, которое наступило. О каждой напоминаем один раз в день."""
@@ -1408,13 +1463,22 @@ class DesktopApp(QObject):
         self._belly_action = QAction("RAM on belly", menu, checkable=True)
         self._belly_action.setChecked(self._belly_ram)
         self._belly_action.toggled.connect(self.set_belly_ram)
+        self._move_action = QAction("Move breaks every hour", menu, checkable=True)
+        self._move_action.setChecked(self._move_on)
+        self._move_action.toggled.connect(self.set_move_breaks)
+        self._autostart_action = QAction("Start with Windows", menu, checkable=True)
+        self._autostart_action.setChecked(autostart.is_enabled())
+        self._autostart_action.setEnabled(autostart.supported())
+        self._autostart_action.toggled.connect(self.set_autostart)
         for action in (
             self._visible_action,
             self._walks_action,
             self._reminders_action,
+            self._move_action,
             self._playful_action,
             self._chatty_action,
             self._belly_action,
+            self._autostart_action,
         ):
             menu.addAction(action)
         menu.addSeparator()

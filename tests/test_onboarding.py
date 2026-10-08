@@ -351,6 +351,7 @@ def setup_world(qapp, config, repo, tmp_path):
         return syncs[-1]
 
     state = StateStore(repo.conn)
+    state.set("move_breaks", False)
     clock = lambda: datetime(2026, 9, 30, 9, 0)  # noqa: E731
     desktop = DesktopApp(
         qapp, config, Tracker(config, repo, clock=clock), state, ram_reader=lambda: 42,

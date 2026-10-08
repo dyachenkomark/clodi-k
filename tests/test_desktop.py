@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from clodick.core.reminders import DONE_TEXT
 from clodick.core.tracker import Tracker
+from clodick.desktop import controller
 from clodick.desktop.brain import Mode
 from clodick.desktop.controller import DesktopApp
 from clodick.desktop.themes import THEMES
@@ -36,6 +37,8 @@ def make_desktop(qapp, config, repo):
     created = []
     state = StateStore(repo.conn)
     state.set("onboarding_done", True)  # мастер первого запуска проверяется в test_onboarding
+    state.set("move_breaks", False)  # разминка проверяется отдельно, своими часами
+    idle = {"seconds": 0.0}
 
     def factory(clock=None, theme="classic"):
         clock = clock or Clock(datetime(2026, 9, 26, 9, 0))
@@ -49,7 +52,9 @@ def make_desktop(qapp, config, repo):
             ram_reader=lambda: 42,
             clock=clock,
             rng=random.Random(3),
+            idle_reader=lambda: idle["seconds"],
         )
+        desktop.idle = idle  # тесты разминки двигают «сколько не трогали мышь»
         desktop.start()
         created.append(desktop)
         return desktop, tracker, clock
@@ -837,3 +842,82 @@ def test_pet_notices_changes_made_by_claude(make_desktop):
     Desk(tracker, desktop._state).add_task("call bank")
     desktop.check_external_changes()
     assert "call bank" in [b.text() for b in desktop.checklist.boxes.values()]
+
+
+# --- разминка раз в час ---
+
+
+def test_move_break_after_an_hour_at_the_desk(make_desktop):
+    desktop, _, clock = make_desktop()  # 26.09.2026, 9:00
+    desktop.set_move_breaks(True)
+    clock.now = datetime(2026, 9, 26, 9, 59)
+    desktop._check_move()
+    assert not desktop.bubble.isVisible()
+    clock.now = datetime(2026, 9, 26, 10, 0)
+    desktop._check_move()
+    assert desktop.bubble.isVisible()
+    assert desktop.bubble.text in controller.MOVE_LINES
+    desktop.bubble.hide()
+    clock.now = datetime(2026, 9, 26, 10, 30)
+    desktop._check_move()  # следующий раз — через час, а не сразу
+    assert not desktop.bubble.isVisible()
+
+
+def test_getting_up_restarts_the_hour(make_desktop):
+    desktop, _, clock = make_desktop()
+    desktop.set_move_breaks(True)
+    clock.now = datetime(2026, 9, 26, 9, 40)
+    desktop.idle["seconds"] = 6 * 60  # отошёл от компьютера
+    desktop._check_move()
+    desktop.idle["seconds"] = 0
+    clock.now = datetime(2026, 9, 26, 10, 20)
+    desktop._check_move()
+    assert not desktop.bubble.isVisible()  # с 9:40 прошло 40 минут
+    clock.now = datetime(2026, 9, 26, 10, 40)
+    desktop._check_move()
+    assert desktop.bubble.isVisible()
+
+
+def test_no_move_break_during_focus_at_night_or_when_off(make_desktop):
+    desktop, _, clock = make_desktop()
+    desktop.set_move_breaks(True)
+    desktop.start_focus()
+    clock.now = datetime(2026, 9, 26, 10, 5)
+    desktop._check_move()
+    assert desktop.bubble.text != "" and desktop.bubble.text not in controller.MOVE_LINES
+    desktop.stop_focus()
+    desktop.bubble.hide()
+
+    desktop.set_move_breaks(False)
+    clock.now = datetime(2026, 9, 26, 12, 0)
+    desktop._check_move()
+    assert not desktop.bubble.isVisible()
+
+    desktop.set_move_breaks(True)
+    clock.now = datetime(2026, 9, 26, 23, 30)
+    desktop._check_move()  # ночью не зовёт
+    assert not desktop.bubble.isVisible()
+
+
+def test_autostart_menu_writes_and_removes_the_run_entry(make_desktop, monkeypatch):
+    from clodick.desktop import autostart
+
+    store = {}
+    monkeypatch.setattr(autostart, "supported", lambda: True)
+    monkeypatch.setattr(autostart, "is_enabled", lambda: "cmd" in store)
+    monkeypatch.setattr(
+        autostart, "set_enabled", lambda on: store.update(cmd=1) if on else store.clear()
+    )
+    desktop, _, _ = make_desktop()
+    assert not desktop._autostart_action.isChecked()
+    desktop._autostart_action.trigger()
+    assert store and desktop._autostart_action.isChecked()
+    desktop._autostart_action.trigger()
+    assert not store and not desktop._autostart_action.isChecked()
+
+
+def test_autostart_command_points_at_the_gui_launcher():
+    from clodick.desktop import autostart
+
+    command = autostart.command()
+    assert command.startswith('"') and ("clodick-gui.exe" in command or "gui_main" in command)
