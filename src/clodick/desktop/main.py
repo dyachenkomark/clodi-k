@@ -26,6 +26,9 @@ def run(config: Config, tracker: Tracker, state: StateStore) -> int:
     lock = QLockFile(str(paths.data_dir() / "clodick.lock"))
     lock.setStaleLockTime(0)
     if not lock.tryLock(100):
+        # Единственный тихий выход: в лог, иначе после автозапуска непонятно, что случилось.
+        _, pid, host, app_name = lock.getLockInfo()
+        log.warning("уже запущен: замок держит %s (pid %s на %s)", app_name, pid, host)
         QMessageBox.information(
             None, "cloDICK", "cloDICK is already running. Look for it in the tray."
         )

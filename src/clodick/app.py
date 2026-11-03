@@ -201,8 +201,19 @@ def _error(message: str) -> None:
 
 
 def gui_main() -> int:
-    """Запуск без консольного окна на Windows."""
-    return main([])
+    """Запуск без консольного окна на Windows.
+
+    Без консоли падение до настройки лога пропадает без следа: пишем его в crash.log.
+    """
+    try:
+        return main([])
+    except BaseException:
+        import traceback
+
+        crash = paths.log_dir() / "crash.log"
+        with crash.open("a", encoding="utf-8") as out:
+            out.write(f"--- {date.today().isoformat()}\n{traceback.format_exc()}\n")
+        raise
 
 
 if __name__ == "__main__":
