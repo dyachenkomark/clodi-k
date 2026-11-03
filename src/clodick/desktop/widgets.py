@@ -1003,8 +1003,9 @@ class ChecklistPopup(QWidget):
         self.note_delete_buttons = {}
         self.meta_labels = {}
         self.section_label = None
-        # Пункты плана наверху: остальной порядок не меняется.
-        for item in sorted(status.items, key=lambda i: i.category.key not in self._plan_keys):
+        # Пункты плана наверху и в его порядке: остальной порядок не меняется.
+        place = {key: index for index, key in enumerate(self._plan_keys)}
+        for item in sorted(status.items, key=lambda i: place.get(i.category.key, len(place))):
             self._add_row(item, status.day)
         if not status.items and not status.upcoming:
             empty = QLabel("Nothing here yet. Add a task below.", objectName="meta")

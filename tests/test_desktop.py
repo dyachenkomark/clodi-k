@@ -891,6 +891,17 @@ def test_plan_in_the_checklist_and_said_once_a_morning(make_desktop):
     assert desktop.bubble.text == "Today's plan is done!"
 
 
+def test_checklist_keeps_the_order_of_the_plan(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    checklist.set_plan(["language", "sport"], "★ Plan 0/2")
+    checklist.set_status(tracker.status(), None)
+    assert (
+        checklist.boxes["language"].parentWidget().y() < checklist.boxes["sport"].parentWidget().y()
+    )
+
+
 def test_hours_are_set_from_the_topic_menu(make_desktop):
     desktop, tracker, _ = make_desktop()
     tracker.add_topic("Maga")
