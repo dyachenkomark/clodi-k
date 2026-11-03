@@ -7,7 +7,8 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from clodick.core.reminders import DONE_TEXT
@@ -822,6 +823,38 @@ def test_switching_topic_tabs_does_not_move_the_checklist(make_desktop):
     assert checklist.width() >= width
     checklist.topic_buttons[""].click()
     assert checklist.pos() == corner
+
+
+def test_checklist_width_does_not_depend_on_task_length(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    short = tracker.add_from_text("milk")
+    long = tracker.add_from_text("maga: " + "very long task title " * 8 + "by fri")
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    assert checklist.width() == checklist.WIDTH
+    box = checklist.boxes[long.key]
+    assert box.height() > 2 * checklist.boxes[short.key].height()  # перенёсся, не обрезался
+    # Строка не вылезает вправо, срок под названием.
+    bottom = box.mapTo(checklist, box.rect().bottomRight())
+    assert bottom.x() < checklist.width()
+    assert checklist.meta_labels[long.key].mapTo(checklist, QPoint(0, 0)).y() >= bottom.y()
+    # Кликается и перенесённая часть названия.
+    QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=QPoint(60, box.height() - 4))
+    assert box.isChecked()
+
+
+def test_long_list_scrolls_instead_of_growing_or_squeezing(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    for number in range(12):
+        tracker.add_from_text(f"task {number} " + "with a rather long title " * 4)
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    assert checklist.width() == checklist.WIDTH
+    assert checklist._list.height() <= checklist._list.MAX_HEIGHT
+    assert checklist._list.verticalScrollBar().maximum() > 0
+    # Строки не сжаты: каждая высотой со свой текст.
+    for box in checklist.boxes.values():
+        assert box.height() >= box.heightForWidth(box.width())
 
 
 def test_pet_notices_changes_made_by_claude(make_desktop):

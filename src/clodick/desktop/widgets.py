@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -21,6 +21,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QScrollArea,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -355,6 +359,11 @@ QLabel#progress {{
     color: {t.progress}; font-weight: 700; font-size: 15px; font-family: {t.title_font};
 }}
 QLabel#footer {{ color: {t.muted}; font-size: 11px; }}
+QScrollArea, QWidget#tasklist {{ background: transparent; border: none; }}
+QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {t.muted}; border-radius: 3px; min-height: 24px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QCheckBox {{
     color: {t.text}; font-size: 14px; spacing: 9px; padding: 3px 0;
     font-family: {t.body_font};
@@ -374,7 +383,7 @@ QLineEdit {{
 }}
 QLineEdit:focus {{ border-color: {t.accent}; }}
 QToolButton#remove {{
-    color: {t.muted}; background: transparent; border: none; font-size: 20px;
+    color: {t.muted}; background: transparent; border: none; font-size: 16px;
     font-family: {t.body_font}; min-width: 18px; padding: 0;
 }}
 QToolButton#remove:hover {{ color: {t.text}; }}
@@ -456,6 +465,99 @@ def meta_text(category, day, show_project: bool = True) -> tuple[str, bool]:
     return " · ".join(parts), late
 
 
+class TaskBox(QCheckBox):
+    """Галочка с переносом текста. Обычный QCheckBox пишет в одну строку и тянет окно вширь."""
+
+    TEXT_LEFT = 23  # индикатор с рамкой и отступ, как spacing в стиле чек-листа
+    PADDING = 3  # как padding в стиле
+    WRAP = Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+
+    def __init__(self, title: str, theme: Theme) -> None:
+        super().__init__(title)
+        self._theme = theme
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        self.ensurePolished()  # размер шрифта приходит из стиля
+        area = QRect(0, 0, max(1, width - self.TEXT_LEFT), 10_000)
+        return self.fontMetrics().boundingRect(area, self.WRAP, self.text()).height() + (
+            2 * self.PADDING
+        )
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.TEXT_LEFT + 100, self.heightForWidth(self.TEXT_LEFT + 100))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.TEXT_LEFT + 100, self.fontMetrics().lineSpacing() + 2 * self.PADDING)
+
+    def hitButton(self, pos: QPoint) -> bool:
+        return self.rect().contains(pos)  # кликается весь текст, а не только первая строка
+
+    def paintEvent(self, _event) -> None:
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ""
+        # Индикатор у первой строки, а не посреди длинного названия.
+        option.rect.setHeight(self.fontMetrics().lineSpacing() + 2 * self.PADDING)
+        painter = QPainter(self)
+        self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
+        painter.setPen(QColor(self._theme.muted if self.isChecked() else self._theme.text))
+        text = self.rect().adjusted(self.TEXT_LEFT, self.PADDING, 0, -self.PADDING)
+        painter.drawText(text, self.WRAP, self.text())
+
+
+class TaskList(QScrollArea):
+    """Список пунктов: растёт с содержимым до MAX_HEIGHT, дальше прокручивается.
+
+    Размер содержимого считаем сами: высота зависит от ширины из-за переноса строк,
+    а окну нужен верный размер сразу, а не на следующем обороте цикла событий.
+    """
+
+    MAX_HEIGHT = 440
+    SCROLLBAR_GAP = 10
+
+    def __init__(self, width: int) -> None:
+        super().__init__(frameShape=QFrame.Shape.NoFrame)
+        self._width = width
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.viewport().setAutoFillBackground(False)
+        content = QWidget(objectName="tasklist")
+        self.items = QVBoxLayout(content)
+        self.items.setContentsMargins(0, 0, 0, 0)
+        self.items.setSpacing(2)
+        self.setWidget(content)
+        content.setAutoFillBackground(False)
+
+    def _content_height(self, width: int) -> int:
+        if self.items.hasHeightForWidth():
+            return self.items.totalHeightForWidth(width)
+        return self.items.totalSizeHint().height()
+
+    def sizeHint(self) -> QSize:
+        return QSize(self._width, min(self._content_height(self._width), self.MAX_HEIGHT))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self._width, 0)
+
+    def fit(self) -> None:
+        """Подогнать содержимое под текущий размер: с полосой прокрутки строки уже."""
+        width = self._width
+        if self._content_height(width) > self.height():
+            width -= self.SCROLLBAR_GAP
+        self.widget().resize(width, self._content_height(width))
+        self.items.activate()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.fit()
+
+
 class ChecklistPopup(QWidget):
     """Чек-лист дня. Закрывается кликом мимо.
 
@@ -487,10 +589,10 @@ class ChecklistPopup(QWidget):
 
     # Отступ заметок слева: под текстом пункта, а не под галочкой.
     NOTE_INDENT = 23
-    NOTE_WIDTH = 250
-    # Вкладки тем переносятся на новую строку, когда шире этого.
-    TOPICS_WIDTH = 330
-    MIN_WIDTH = 240
+    # Ширина окна постоянная: длинные названия переносятся, а не растягивают его.
+    WIDTH = 320
+    # Вкладки тем переносятся на новую строку, когда шире этого: ширина минус поля панели.
+    TOPICS_WIDTH = WIDTH - 28
 
     def __init__(self, theme: Theme = THEMES["classic"]) -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -525,10 +627,10 @@ class ChecklistPopup(QWidget):
         self._ram: int | None = None
         self._focus_today = 0
 
-        self._items = QVBoxLayout()
-        self._items.setSpacing(2)
+        self._list = TaskList(self.TOPICS_WIDTH)
+        self._items = self._list.items
 
-        self.new_task = QLineEdit(placeholderText="Add a task…  maga: report by fri 15:00")
+        self.new_task = QLineEdit(placeholderText="Add a task…  maga: report by fri")
         self.new_task.setToolTip(
             "project: title, then a deadline — by fri, tomorrow, 02.10, in 3 days — and a time"
         )
@@ -540,7 +642,7 @@ class ChecklistPopup(QWidget):
         adder.addWidget(self.new_task, 1)
         adder.addWidget(self.new_task_daily)
 
-        self.focus_line = QLabel(objectName="focusline")
+        self.focus_line = QLabel(objectName="focusline", wordWrap=True)
         self.stop_button = QToolButton(objectName="stop", text="Stop")
         self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_button.clicked.connect(self.focus_stopped)
@@ -560,7 +662,7 @@ class ChecklistPopup(QWidget):
         layout.addLayout(self._topic_rows)
         layout.addWidget(self.topic_edit)
         layout.addWidget(self._focus_row)
-        layout.addLayout(self._items)
+        layout.addWidget(self._list)
         layout.addLayout(adder)
         layout.addWidget(self._footer)
         self._boxes: dict[str, QCheckBox] = {}
@@ -574,7 +676,14 @@ class ChecklistPopup(QWidget):
         self._signature: list = []
         self.meta_labels: dict[str, QLabel] = {}
         self.section_label: QLabel | None = None
-        self.setMinimumWidth(self.MIN_WIDTH)
+        self.setFixedWidth(self.WIDTH)
+
+    def sizeHint(self) -> QSize:
+        """Высота окна по его постоянной ширине: от неё зависит, сколько строк займёт текст."""
+        layout = self.layout()
+        if layout.hasHeightForWidth():
+            return QSize(self.WIDTH, layout.totalHeightForWidth(self.WIDTH))
+        return QSize(self.WIDTH, layout.totalSizeHint().height())
 
     @property
     def boxes(self) -> dict[str, QCheckBox]:
@@ -584,7 +693,7 @@ class ChecklistPopup(QWidget):
         """Строка текущего фокуса или перерыва под заголовком. None — спрятать."""
         self.focus_line.setText(text or "")
         self._focus_row.setVisible(bool(text))
-        self.adjustSize()
+        self._relayout()
 
     # --- темы ---
 
@@ -627,6 +736,7 @@ class ChecklistPopup(QWidget):
                 self._topic_rows.addLayout(row)
                 row, used = QHBoxLayout(), 0
             row.setSpacing(4)
+            chip.setMaximumWidth(self.TOPICS_WIDTH)
             row.addWidget(chip)
             chip.show()  # явно: иначе Qt покажет его на следующем обороте, а размер считаем сейчас
             used += width
@@ -662,11 +772,10 @@ class ChecklistPopup(QWidget):
     def _stay_in_place(self, change) -> None:
         """Сменить содержимое, не двигая окно: вкладки остаются под мышкой.
 
-        Верхний левый угол стоит на месте, ширина не уменьшается. Сдвигаемся, только
-        если окно иначе вылезет за край экрана.
+        Верхний левый угол стоит на месте. Сдвигаемся, только если окно иначе вылезет
+        за край экрана.
         """
         corner = self.pos()
-        self.setMinimumWidth(max(self.minimumWidth(), self.width()))
         change()
         self._relayout()
         screen = self.screen().availableGeometry()
@@ -702,7 +811,7 @@ class ChecklistPopup(QWidget):
             "New name, then Enter" if name else "New topic, e.g. Turkov, then Enter"
         )
         self.topic_edit.show()
-        self.adjustSize()
+        self._relayout()
         self.resized.emit()
         self.topic_edit.setFocus()
         self.topic_edit.selectAll()
@@ -718,7 +827,7 @@ class ChecklistPopup(QWidget):
         elif text and text != renaming:
             self.topic_renamed.emit(renaming, text)
         else:
-            self.adjustSize()
+            self._relayout()
             self.resized.emit()
 
     def task_menu(self, key: str) -> QMenu:
@@ -737,7 +846,7 @@ class ChecklistPopup(QWidget):
     def _update_adder(self) -> None:
         topic = self.current_topic()
         if topic is None:
-            self.new_task.setPlaceholderText("Add a task…  maga: report by fri 15:00")
+            self.new_task.setPlaceholderText("Add a task…  maga: report by fri")
         else:
             example = "stretch 10 min" if topic.daily else "report by fri 15:00"
             self.new_task.setPlaceholderText(f"Add to {topic.name}…  {example}")
@@ -784,7 +893,7 @@ class ChecklistPopup(QWidget):
         if focus_today:
             parts.append(f"Focus today: {focus_today}")
         self._footer.setText(" · ".join(parts))
-        self.adjustSize()
+        self._relayout()
 
     def open_near(self, anchor: QRect, screen_rect: QRect) -> None:
         """Открывает над anchor, прижимая к краям экрана.
@@ -792,7 +901,6 @@ class ChecklistPopup(QWidget):
         Размер считается после show(): до показа Qt не знает окончательную раскладку,
         и окно потом вырастает вниз, прямо на персонажа.
         """
-        self.setMinimumWidth(self.MIN_WIDTH)  # ширину держим только пока листают вкладки
         self.show()
         self._relayout()
         x = anchor.center().x() - self.width() // 2
@@ -810,10 +918,12 @@ class ChecklistPopup(QWidget):
         Qt пересчитал бы позже, в цикле событий. Нам нужен верный размер прямо сейчас,
         чтобы поставить окно у персонажа, поэтому сбрасываем кэш на всех трёх уровнях.
         """
+        self._list.updateGeometry()
         for layout in (self._items, self._panel.layout(), self.layout()):
             layout.invalidate()
         self.layout().activate()
         self.adjustSize()
+        self._list.fit()
 
     def ask_note(self, key: str) -> None:
         """Открыть поле заметки у пункта: например, сразу после галочки."""
@@ -821,8 +931,9 @@ class ChecklistPopup(QWidget):
         if editor is None:
             return
         editor.show()
-        self.adjustSize()
+        self._relayout()
         self.resized.emit()
+        self._list.ensureWidgetVisible(editor)
         editor.setFocus()
 
     def _save_note(self, key: str) -> None:
@@ -833,7 +944,7 @@ class ChecklistPopup(QWidget):
         if text:
             self.note_added.emit(key, text)
         else:
-            self.adjustSize()
+            self._relayout()
             self.resized.emit()
 
     def _submit(self) -> None:
@@ -883,7 +994,7 @@ class ChecklistPopup(QWidget):
         line = QHBoxLayout()
         line.setContentsMargins(0, 0, 0, 0)
         column.addLayout(line)
-        box = QCheckBox(item.category.title)
+        box = TaskBox(item.category.title, self._theme)
         box.setCursor(Qt.CursorShape.PointingHandCursor)
         box.toggled.connect(lambda checked, key=key: self.toggled.emit(key, checked))
         line.addWidget(box, 1)
@@ -892,9 +1003,29 @@ class ChecklistPopup(QWidget):
             box.customContextMenuRequested.connect(
                 lambda pos, key=key, box=box: self.task_menu(key).exec(box.mapToGlobal(pos))
             )
+        top = Qt.AlignmentFlag.AlignTop  # кнопки тоже у первой строки
+        note = QToolButton(objectName="note", text="✎")
+        note.setToolTip("Add a note or result")
+        note.setCursor(Qt.CursorShape.PointingHandCursor)
+        note.clicked.connect(lambda _=False, key=key: self.ask_note(key))
+        line.addWidget(note, 0, top)
+        self.note_buttons[key] = note
+        focus = QToolButton(objectName="focus", text="▶")
+        focus.setToolTip("Start a focus session on this")
+        focus.setCursor(Qt.CursorShape.PointingHandCursor)
+        focus.clicked.connect(lambda _=False, key=key: self.focus_requested.emit(key))
+        line.addWidget(focus, 0, top)
+        self.focus_buttons[key] = focus
+        if item.category.custom:
+            remove = QToolButton(objectName="remove", text="×")
+            remove.setToolTip("Delete task")
+            remove.setCursor(Qt.CursorShape.PointingHandCursor)
+            remove.clicked.connect(lambda _=False, key=key: self.task_removed.emit(key))
+            line.addWidget(remove, 0, top)
+            self.remove_buttons[key] = remove
         meta, late = meta_text(item.category, day, show_project=not self._topic)
         if meta:
-            label = QLabel(objectName="metalate" if late else "meta")
+            label = QLabel(objectName="metalate" if late else "meta", wordWrap=True)
             project = item.category.project
             color = next((t.color for t in self._topics if t.name == project), "")
             if project and color and not self._topic and meta.startswith(project):
@@ -902,28 +1033,9 @@ class ChecklistPopup(QWidget):
                 label.setText(f'<span style="color:{color}">{project}</span>{meta[len(project) :]}')
             else:
                 label.setText(meta)
-            label.setContentsMargins(8, 0, 2, 0)
-            line.addWidget(label)
+            label.setContentsMargins(self.NOTE_INDENT, 0, 0, 0)
+            column.addWidget(label)
             self.meta_labels[key] = label
-        note = QToolButton(objectName="note", text="✎")
-        note.setToolTip("Add a note or result")
-        note.setCursor(Qt.CursorShape.PointingHandCursor)
-        note.clicked.connect(lambda _=False, key=key: self.ask_note(key))
-        line.addWidget(note)
-        self.note_buttons[key] = note
-        focus = QToolButton(objectName="focus", text="▶")
-        focus.setToolTip("Start a focus session on this")
-        focus.setCursor(Qt.CursorShape.PointingHandCursor)
-        focus.clicked.connect(lambda _=False, key=key: self.focus_requested.emit(key))
-        line.addWidget(focus)
-        self.focus_buttons[key] = focus
-        if item.category.custom:
-            remove = QToolButton(objectName="remove", text="×")
-            remove.setToolTip("Delete task")
-            remove.setCursor(Qt.CursorShape.PointingHandCursor)
-            remove.clicked.connect(lambda _=False, key=key: self.task_removed.emit(key))
-            line.addWidget(remove)
-            self.remove_buttons[key] = remove
         self._add_notes(column, key, item.notes)
         self._items.addWidget(row)
         # Новый виджет в показанном окне Qt показывает отложенно, в цикле событий.
@@ -939,7 +1051,6 @@ class ChecklistPopup(QWidget):
             line = QHBoxLayout()
             line.setContentsMargins(self.NOTE_INDENT, 0, 0, 0)
             label = QLabel(note.text, objectName="notetext", wordWrap=True)
-            label.setMaximumWidth(self.NOTE_WIDTH)
             line.addWidget(label, 1)
             delete = QToolButton(objectName="notedel", text="×")
             delete.setToolTip("Delete note")
