@@ -857,6 +857,59 @@ def test_long_list_scrolls_instead_of_growing_or_squeezing(make_desktop):
         assert box.height() >= box.heightForWidth(box.width())
 
 
+def test_plan_in_the_checklist_and_said_once_a_morning(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    tracker.add_topic("Maga")
+    task = tracker.add_from_text("report", topic="Maga")
+    other = tracker.add_from_text("milk")
+
+    desktop.check_reminders_now()  # норм нет: плана нет, чек-лист как раньше
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    assert not checklist.plan_label.isVisible()
+    assert "★" not in checklist.meta_labels[task.key].text()
+    checklist.hide()
+
+    tracker.update_topic("Maga", hours=30)
+    desktop.bubble.hide()
+    desktop.check_reminders_now()
+    assert desktop.bubble.isVisible() and desktop.bubble.text.startswith("Plan 0/1. Left: report")
+    desktop.bubble.hide()
+    desktop.check_reminders_now()
+    assert not desktop.bubble.isVisible()  # второй раз за день не повторяет
+
+    desktop.open_checklist()
+    assert checklist.plan_label.text() == "★ Plan 0/1"
+    assert checklist.meta_labels[task.key].text().startswith("★")
+    assert other.key not in checklist.meta_labels
+    # Пункт плана выше остальных задач.
+    rows = [checklist._boxes[task.key], checklist._boxes[other.key]]
+    assert rows[0].parentWidget().y() < rows[1].parentWidget().y()
+
+    checklist.boxes[task.key].click()
+    assert checklist.plan_label.text() == "★ Plan 1/1"
+    assert desktop.bubble.text == "Today's plan is done!"
+
+
+def test_hours_are_set_from_the_topic_menu(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    tracker.add_topic("Maga")
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    checklist.edit_hours("Maga")
+    assert checklist.topic_edit.isVisible()
+    checklist.topic_edit.setText("много")
+    checklist._submit_topic()
+    assert tracker.topic("Maga").hours == 0
+    checklist.edit_hours("Maga")
+    checklist.topic_edit.setText("30")
+    checklist._submit_topic()
+    assert tracker.topic("Maga").hours == 30
+    assert not checklist.topic_edit.isVisible()
+    labels = [a.text() for a in checklist.topic_menu("Maga").actions()]
+    assert "Hours per week: 30…" in labels
+
+
 def test_pet_notices_changes_made_by_claude(make_desktop):
     from clodick.mcp_server import Desk
 

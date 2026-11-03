@@ -237,14 +237,22 @@ PLAN_SYSTEM = (
     "You are cloDICK, a small friendly desktop pet and personal assistant. "
     "Reply in the language the task titles are written in. "
     "Give a short plan for today: 2-4 sentences, no lists, no markdown. "
-    "Mention overdue items first, then today's deadlines, then one thing from the next days "
-    "if it needs a start. Be warm and concrete. Never invent tasks or dates."
+    "If the facts hold a section 'Plan for today', retell only that plan in its order, "
+    "skip what is done and say what is left; if a topic has no marks for days, say that "
+    "'no marks' does not prove no work was done. "
+    "Otherwise mention overdue items first, then today's deadlines, then one thing from the "
+    "next days if it needs a start. Be warm and concrete. Never invent tasks or dates."
 )
 
 
-def day_context(status: DayStatus, open_tasks: list[Task], now_text: str) -> str:
+def day_context(
+    status: DayStatus, open_tasks: list[Task], now_text: str, plan: list[str] | None = None
+) -> str:
     """Факты для модели: всё посчитано кодом, модель только пересказывает."""
-    lines = [f"Now: {now_text}.", "Today's checklist:"]
+    lines = [f"Now: {now_text}."]
+    if plan:
+        lines += ["Plan for today, already chosen:", *plan]
+    lines.append("Today's checklist:")
     for item in status.items:
         mark = "done" if item.done else "not done"
         lines.append(f"- {item.category.title} ({_describe(item.category, status.day)}): {mark}")
@@ -277,6 +285,11 @@ def _describe(item, today: date) -> str:
 
 
 def plan_day(
-    client: LLMClient, status: DayStatus, open_tasks: list[Task], now_text: str, on_wait=None
+    client: LLMClient,
+    status: DayStatus,
+    open_tasks: list[Task],
+    now_text: str,
+    on_wait=None,
+    plan: list[str] | None = None,
 ) -> str:
-    return client.chat(PLAN_SYSTEM, day_context(status, open_tasks, now_text), 220, on_wait)
+    return client.chat(PLAN_SYSTEM, day_context(status, open_tasks, now_text, plan), 220, on_wait)

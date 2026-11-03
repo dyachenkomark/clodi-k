@@ -47,9 +47,11 @@ TASK_UPSERT = (
 
 
 TOPIC_UPSERT = (
-    "INSERT INTO topics (id, name, aliases, color, repeat, position) VALUES (?,?,?,?,?,?) "
+    "INSERT INTO topics (id, name, aliases, color, repeat, position, hours) "
+    "VALUES (?,?,?,?,?,?,?) "
     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, aliases=excluded.aliases, "
-    "color=excluded.color, repeat=excluded.repeat, position=excluded.position"
+    "color=excluded.color, repeat=excluded.repeat, position=excluded.position, "
+    "hours=excluded.hours"
 )
 
 
@@ -152,13 +154,13 @@ class CompletionRepository:
     def topics(self) -> list[Topic]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT id, name, aliases, color, repeat, position FROM topics "
+                "SELECT id, name, aliases, color, repeat, position, hours FROM topics "
                 "ORDER BY position, rowid"
             ).fetchall()
         return [
             Topic(tid, name, tuple(a.strip() for a in aliases.split(",") if a.strip()),
-                  color, repeat == "daily", position)
-            for tid, name, aliases, color, repeat, position in rows
+                  color, repeat == "daily", position, hours)
+            for tid, name, aliases, color, repeat, position, hours in rows
         ]  # fmt: skip
 
     def save_topic(self, topic: Topic) -> Topic:
@@ -166,7 +168,7 @@ class CompletionRepository:
             self.conn.execute(
                 TOPIC_UPSERT,
                 (topic.id, topic.name, ", ".join(topic.aliases), topic.color,
-                 "daily" if topic.daily else "", topic.position),
+                 "daily" if topic.daily else "", topic.position, topic.hours),
             )  # fmt: skip
         return topic
 

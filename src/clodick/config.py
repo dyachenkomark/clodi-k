@@ -148,7 +148,14 @@ def parse_config(raw: dict) -> Config:
         if key in seen:
             raise ConfigError(f"Направление «{key}» указано дважды")
         seen.add(key)
-        categories.append(Category(key=key, title=title, url=item.get("url") or None))
+        categories.append(
+            Category(
+                key=key,
+                title=title,
+                url=item.get("url") or None,
+                project=item.get("project") or "",
+            )
+        )
 
     return Config(
         categories=tuple(categories),

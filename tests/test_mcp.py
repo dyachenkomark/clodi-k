@@ -88,7 +88,7 @@ def test_server_exposes_the_tools(desk):
     tools = {t.name for t in asyncio.run(server.list_tools())}
     assert tools == {
         "today", "list_tasks", "list_topics", "add_task", "add_note",
-        "complete", "reopen", "move_task", "add_topic",
+        "complete", "reopen", "move_task", "add_topic", "plan", "set_hours",
     }  # fmt: skip
     result = asyncio.run(server.call_tool("add_task", {"text": "maga: slides by fri"}))
     assert "«slides» — Maga, due Fri 02 Oct" in result.content[0].text

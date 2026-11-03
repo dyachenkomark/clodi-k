@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from clodick import llm, paths
 from clodick.characters import DEFAULT_CHARACTER, Character, builtin_dir, discover
 from clodick.config import Config
+from clodick.core import plan
 from clodick.core.chatter import idle_line
 from clodick.core.pomodoro import Event, Phase, Pomodoro
 from clodick.core.reminders import (
@@ -82,6 +83,8 @@ HOP = (1, 2, 3, 3, 2, 1, 0)
 HOP_FRAME_MS = 40
 # Ночью, с NIGHT_FROM до NIGHT_TO часов, енот сонный.
 NIGHT_FROM, NIGHT_TO = 23, 6
+# В какой день план уже показан утром.
+PLAN_SHOWN = "plan_shown_day"
 # Разминка: после часа за компьютером — встать и подвигаться. Пять минут без мыши
 # и клавиатуры значат, что человек вставал: отсчёт начинается заново.
 MOVE_EVERY = timedelta(minutes=60)
@@ -272,6 +275,7 @@ class DesktopApp(QObject):
         self.checklist.topic_renamed.connect(self._rename_topic)
         self.checklist.topic_removed.connect(self._remove_topic)
         self.checklist.topic_daily.connect(lambda name, on: self._change_topic(name, daily=on))
+        self.checklist.topic_hours.connect(lambda name, h: self._change_topic(name, hours=h))
         self.checklist.topic_color.connect(
             lambda name, color: self._change_topic(name, color=color)
         )
@@ -506,7 +510,14 @@ class DesktopApp(QObject):
 
     def _fill_checklist(self) -> None:
         self.checklist.set_topics(self._tracker.topics(), self._state.get("topic") or "")
+        self._show_plan()
         self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
+
+    def _show_plan(self) -> list[plan.PlanItem]:
+        """План дня в чек-листе. Без норм часов плана нет: чек-лист как обычно."""
+        items = plan.todays_plan(self._tracker, self._state) if plan.enabled(self._tracker) else []
+        self.checklist.set_plan([i.key for i in items if i.key], plan.plan_line(items))
+        return items
 
     def check_reminders_now(self) -> None:
         """Для тестов и отладки: проверить напоминания немедленно."""
@@ -534,11 +545,14 @@ class DesktopApp(QObject):
         else:
             self._tracker.unmark(key)
         status = self._tracker.status()
+        day_plan = self._show_plan()
         self.checklist.set_status(status, self._ram, self._tracker.focus_count())
         log.info("%s %s через окно", "done" if checked else "undo", key)
         self._data_changed()
         if checked and status.all_done:
             self.say(DONE_TEXT, seconds=6)
+        elif checked and any(i.key == key for i in day_plan):
+            self.say(plan.plan_text(day_plan), seconds=8)
         if checked:
             # Сразу предложить записать результат. Не обязательно: можно просто закрыть.
             self.checklist.ask_note(key)
@@ -645,7 +659,8 @@ class DesktopApp(QObject):
     def _greet(self) -> None:
         if not self._reminders_on or self.pomodoro.phase is Phase.FOCUS:
             return
-        if self._llm is not None:
+        if self._llm is not None or plan.enabled(self._tracker):
+            self._state.set(PLAN_SHOWN, self._tracker.today().isoformat())
             self.plan_my_day(quiet=True)
             return
         text = greeting_text(self._tracker.status())
@@ -661,11 +676,17 @@ class DesktopApp(QObject):
         return self._env.llm_client(settings, self._env.load_key())
 
     def plan_my_day(self, quiet: bool = False) -> None:
-        """План на день от модели по задачам и заметкам. Факты собирает код."""
+        """План на день: выбирает код, модель пересказывает. Без модели — текст из кода."""
+        items = self._show_plan()
+        written = plan.plan_text(items)
         if self._llm is None:
-            self.say("Connect an AI model in Setup and I'll plan your day.", 6, wave=False)
+            if written:
+                self.say(written, seconds=max(10, min(30, len(written) / 12)))
+            else:
+                self.say("Connect an AI model in Setup and I'll plan your day.", 6, wave=False)
             return
         status, tasks = self._tracker.status(), self._tracker.open_tasks()
+        facts = plan.facts(items)
         now_text = self._clock().strftime("%A %d %B %Y, %H:%M")
         client = self._llm
         told = []
@@ -679,11 +700,10 @@ class DesktopApp(QObject):
         def done(text, error) -> None:
             if error is not None:
                 log.warning("модель не ответила: %s", error)
-                if quiet:
-                    fallback = greeting_text(status)
-                    if fallback:
-                        self.say(fallback, seconds=8)
-                else:
+                fallback = written or (greeting_text(status) if quiet else None)
+                if fallback:
+                    self.say(fallback, seconds=max(8, min(30, len(fallback) / 12)))
+                elif not quiet:
                     self.say(f"I couldn't reach the model: {error}", 8, wave=False)
                 return
             if text:
@@ -691,7 +711,9 @@ class DesktopApp(QObject):
 
         if not quiet:
             self.say("Let me think…", 4, wave=False)
-        self._background(lambda: llm.plan_day(client, status, tasks, now_text, waiting), done)
+        self._background(
+            lambda: llm.plan_day(client, status, tasks, now_text, waiting, facts), done
+        )
 
     # --- мастер настройки ---
 
@@ -1011,6 +1033,7 @@ class DesktopApp(QObject):
             return  # во время фокуса енот молчит
         if not self._reminders_on:
             return
+        self._check_morning_plan()
         if self._check_timed():
             return
         if not due:
@@ -1019,6 +1042,20 @@ class DesktopApp(QObject):
         if text:
             log.info("напоминание: %s", text)
             self.say(text)
+
+    def _check_morning_plan(self) -> None:
+        """Новый день: енот мог работать всю ночь, поэтому план показываем не только при запуске."""
+        today = self._tracker.today().isoformat()
+        if self._state.get(PLAN_SHOWN) == today or not plan.enabled(self._tracker):
+            return
+        now = self._clock()
+        if now.hour >= NIGHT_FROM or now.hour < NIGHT_TO:
+            return
+        if self._read_idle() >= MOVE_IDLE_RESET_SECONDS:
+            return  # человека нет: покажем, когда вернётся
+        self._state.set(PLAN_SHOWN, today)
+        log.info("план дня: показываем")
+        self.plan_my_day(quiet=True)
 
     def _check_move(self) -> None:
         """Час за компьютером без перерыва — позвать встать и подвигаться."""

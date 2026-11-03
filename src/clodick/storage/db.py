@@ -112,6 +112,10 @@ MIGRATIONS: list[str] = [
         position INTEGER NOT NULL DEFAULT 0
     );
     """,
+    # 8: норма часов в неделю у темы, 0 — без нормы.
+    """
+    ALTER TABLE topics ADD COLUMN hours INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 

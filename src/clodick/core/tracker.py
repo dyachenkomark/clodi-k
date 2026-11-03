@@ -235,6 +235,35 @@ class Tracker:
     def _color(index: int) -> str:
         return TOPIC_COLORS[index % len(TOPIC_COLORS)]
 
+    def last_activity(self, days: int) -> dict[str, date]:
+        """Когда в теме в последний раз что-то отмечено: галочка, заметка или фокус.
+
+        За последние days дней. Ключ — имя темы в нижнем регистре.
+        """
+        last_day = self.today()
+        first = last_day - timedelta(days=days)
+        project_of = {c.key: c.project for c in self._config.categories if c.project}
+        project_of |= {t.key: t.project for t in self._repo.tasks() if t.project}
+        events = [(d, k) for d, k, _ in self._repo.completions_between(first, last_day)]
+        events += [(n.day, n.key) for n in self._repo.notes_between(first, last_day)]
+        events += [(d, k) for d, k, _ in self._repo.focus_between(first, last_day) if k]
+        found: dict[str, date] = {}
+        for day, key in events:
+            project = project_of.get(key, "").casefold()
+            if project and day > found.get(project, date.min):
+                found[project] = day
+        return found
+
+    def is_done(self, key: str) -> bool | None:
+        """Сделан ли пункт сегодня. None — такого пункта больше нет."""
+        try:
+            _, task = self._find(key)
+        except KeyError:
+            return None
+        if task is not None and not task.daily:
+            return task.done
+        return key in self._repo.completions_for(self.today())
+
     def remove_task(self, key: str) -> bool:
         tid = task_id(key)
         return tid is not None and self._repo.remove_task(tid)

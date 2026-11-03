@@ -586,6 +586,7 @@ class ChecklistPopup(QWidget):
     note_added = Signal(str, str)
     note_deleted = Signal(int)
     resized = Signal()
+    topic_hours = Signal(str, int)
 
     # Отступ заметок слева: под текстом пункта, а не под галочкой.
     NOTE_INDENT = 23
@@ -620,6 +621,7 @@ class ChecklistPopup(QWidget):
         self.topic_edit.returnPressed.connect(self._submit_topic)
         self.topic_edit.hide()
         self._renaming: str | None = None
+        self._hours_for: str | None = None
         self.topic_buttons: dict[str, QToolButton] = {}
         self._topics: list[Topic] = []
         self._topic = ""
@@ -642,6 +644,10 @@ class ChecklistPopup(QWidget):
         adder.addWidget(self.new_task, 1)
         adder.addWidget(self.new_task_daily)
 
+        self._plan_keys: tuple[str, ...] = ()
+        self.plan_label = QLabel(objectName="meta", wordWrap=True)
+        self.plan_label.hide()
+
         self.focus_line = QLabel(objectName="focusline", wordWrap=True)
         self.stop_button = QToolButton(objectName="stop", text="Stop")
         self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -661,6 +667,7 @@ class ChecklistPopup(QWidget):
         layout.addLayout(header)
         layout.addLayout(self._topic_rows)
         layout.addWidget(self.topic_edit)
+        layout.addWidget(self.plan_label)
         layout.addWidget(self._focus_row)
         layout.addWidget(self._list)
         layout.addLayout(adder)
@@ -694,6 +701,12 @@ class ChecklistPopup(QWidget):
         self.focus_line.setText(text or "")
         self._focus_row.setVisible(bool(text))
         self._relayout()
+
+    def set_plan(self, keys: list[str], line: str) -> None:
+        """План дня: его пункты идут первыми и со звёздочкой, line — строка над списком."""
+        self._plan_keys = tuple(keys)
+        self.plan_label.setText(line)
+        self.plan_label.setVisible(bool(line))
 
     # --- темы ---
 
@@ -793,6 +806,8 @@ class ChecklistPopup(QWidget):
         daily.setChecked(topic.daily)
         daily.setToolTip("Tasks here repeat daily. Sport, Study and other habits show here")
         daily.toggled.connect(lambda on: self.topic_daily.emit(name, on))
+        label = f"Hours per week: {topic.hours}…" if topic.hours else "Hours per week…"
+        menu.addAction(label, lambda: self.edit_hours(name))
         colors = menu.addMenu("Color")
         from clodick.core.tracker import TOPIC_COLORS
 
@@ -816,13 +831,31 @@ class ChecklistPopup(QWidget):
         self.topic_edit.setFocus()
         self.topic_edit.selectAll()
 
+    def edit_hours(self, name: str) -> None:
+        """Поле нормы часов: по ней клодик выбирает план дня."""
+        topic = next(t for t in self._topics if t.name == name)
+        self._hours_for = name
+        self.topic_edit.setText(str(topic.hours) if topic.hours else "")
+        self.topic_edit.setPlaceholderText(f"{name}: hours per week, then Enter")
+        self.topic_edit.show()
+        self._relayout()
+        self.resized.emit()
+        self.topic_edit.setFocus()
+        self.topic_edit.selectAll()
+
     def _submit_topic(self) -> None:
         text = " ".join(self.topic_edit.text().split())
-        renaming = self._renaming
+        renaming, hours_for = self._renaming, self._hours_for
         self.topic_edit.clear()
         self.topic_edit.hide()
-        self._renaming = None
-        if text and renaming is None:
+        self._renaming = self._hours_for = None
+        if hours_for is not None:
+            if text.isdigit() and int(text) <= 168:
+                self.topic_hours.emit(hours_for, int(text))
+            else:
+                self._relayout()
+                self.resized.emit()
+        elif text and renaming is None:
             self.topic_added.emit(text)
         elif text and text != renaming:
             self.topic_renamed.emit(renaming, text)
@@ -881,6 +914,7 @@ class ChecklistPopup(QWidget):
             for i in items
         ]
         signature.append(("topic", self._topic, *(t.color for t in self._topics)))
+        signature.append(("plan", *self._plan_keys))
         if signature != self._signature:
             self._signature = signature
             self._rebuild(status)
@@ -969,7 +1003,8 @@ class ChecklistPopup(QWidget):
         self.note_delete_buttons = {}
         self.meta_labels = {}
         self.section_label = None
-        for item in status.items:
+        # Пункты плана наверху: остальной порядок не меняется.
+        for item in sorted(status.items, key=lambda i: i.category.key not in self._plan_keys):
             self._add_row(item, status.day)
         if not status.items and not status.upcoming:
             empty = QLabel("Nothing here yet. Add a task below.", objectName="meta")
@@ -1024,15 +1059,17 @@ class ChecklistPopup(QWidget):
             line.addWidget(remove, 0, top)
             self.remove_buttons[key] = remove
         meta, late = meta_text(item.category, day, show_project=not self._topic)
-        if meta:
+        star = "★ " if key in self._plan_keys else ""
+        if meta or star:
             label = QLabel(objectName="metalate" if late else "meta", wordWrap=True)
             project = item.category.project
             color = next((t.color for t in self._topics if t.name == project), "")
             if project and color and not self._topic and meta.startswith(project):
                 # Тема в своём цвете: во вкладке All сразу видно, откуда задача.
-                label.setText(f'<span style="color:{color}">{project}</span>{meta[len(project) :]}')
+                colored = f'<span style="color:{color}">{project}</span>{meta[len(project) :]}'
+                label.setText(star + colored)
             else:
-                label.setText(meta)
+                label.setText((star + meta).strip())
             label.setContentsMargins(self.NOTE_INDENT, 0, 0, 0)
             column.addWidget(label)
             self.meta_labels[key] = label
