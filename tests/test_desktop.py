@@ -921,3 +921,19 @@ def test_autostart_command_points_at_the_gui_launcher():
 
     command = autostart.command()
     assert command.startswith('"') and ("clodick-gui.exe" in command or "gui_main" in command)
+
+
+def test_removing_a_task_shrinks_the_checklist_and_keeps_it_above_the_pet(make_desktop):
+    desktop, tracker, _ = make_desktop()
+    for text in ("maga: report", "buy milk", "call bank"):
+        tracker.add_from_text(text)
+    desktop.open_checklist()
+    checklist = desktop.checklist
+    heights = [checklist.height()]
+    for _ in range(3):
+        key = next(k for k in checklist.boxes if k.startswith("task:"))
+        checklist.remove_buttons[key].click()
+        heights.append(checklist.height())
+        # Окно сразу стоит над персонажем своей новой высотой, а не прежней.
+        assert checklist.geometry().bottom() + 7 == desktop.pet.geometry().top()
+    assert heights == sorted(heights, reverse=True) and len(set(heights)) == 4

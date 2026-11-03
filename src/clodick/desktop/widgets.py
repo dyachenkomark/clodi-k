@@ -499,6 +499,7 @@ class ChecklistPopup(QWidget):
         self.setStyleSheet(checklist_style(theme))
         panel = QFrame(self)
         panel.setObjectName("panel")
+        self._panel = panel
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(panel)
@@ -604,12 +605,14 @@ class ChecklistPopup(QWidget):
             while row.count():
                 widget = row.takeAt(0).widget()
                 if widget is not None:
+                    widget.setParent(None)
                     widget.deleteLater()
             row.deleteLater()
         self.topic_buttons = {}
         chips = [self._chip("", "All")]
         chips += [self._chip(t.name, t.name, t.color) for t in self._topics]
-        add = QToolButton(objectName="topicadd", text="+")
+        # Родитель — панель: вкладка ещё не в раскладке, а show() без родителя открыл бы окно.
+        add = QToolButton(self._panel, objectName="topicadd", text="+")
         add.setToolTip("New topic")
         add.setCursor(Qt.CursorShape.PointingHandCursor)
         add.clicked.connect(lambda: self.edit_topic(None))
@@ -625,13 +628,14 @@ class ChecklistPopup(QWidget):
                 row, used = QHBoxLayout(), 0
             row.setSpacing(4)
             row.addWidget(chip)
+            chip.show()  # явно: иначе Qt покажет его на следующем обороте, а размер считаем сейчас
             used += width
         row.addStretch()
         self._topic_rows.addLayout(row)
         self._update_adder()
 
     def _chip(self, name: str, text: str, color: str = "") -> QToolButton:
-        chip = QToolButton(objectName="topicall" if not name else "topic", text=text)
+        chip = QToolButton(self._panel, objectName="topicall" if not name else "topic", text=text)
         chip.setCheckable(True)
         chip.setChecked(name == self._topic)
         chip.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -664,8 +668,7 @@ class ChecklistPopup(QWidget):
         corner = self.pos()
         self.setMinimumWidth(max(self.minimumWidth(), self.width()))
         change()
-        self.layout().activate()
-        self.adjustSize()
+        self._relayout()
         screen = self.screen().availableGeometry()
         x = max(screen.left(), min(corner.x(), screen.right() - self.width()))
         y = max(screen.top(), min(corner.y(), screen.bottom() - self.height()))
@@ -791,8 +794,7 @@ class ChecklistPopup(QWidget):
         """
         self.setMinimumWidth(self.MIN_WIDTH)  # ширину держим только пока листают вкладки
         self.show()
-        self.layout().activate()
-        self.adjustSize()
+        self._relayout()
         x = anchor.center().x() - self.width() // 2
         y = anchor.top() - self.height() - 6
         if y < screen_rect.top():
@@ -800,6 +802,18 @@ class ChecklistPopup(QWidget):
         x = max(screen_rect.left(), min(x, screen_rect.right() - self.width()))
         self.move(x, y)
         self.activateWindow()
+
+    def _relayout(self) -> None:
+        """Пересчитать размер окна по текущему содержимому.
+
+        Удаление строки помечает грязным только свой слой раскладки; размер панели и окна
+        Qt пересчитал бы позже, в цикле событий. Нам нужен верный размер прямо сейчас,
+        чтобы поставить окно у персонажа, поэтому сбрасываем кэш на всех трёх уровнях.
+        """
+        for layout in (self._items, self._panel.layout(), self.layout()):
+            layout.invalidate()
+        self.layout().activate()
+        self.adjustSize()
 
     def ask_note(self, key: str) -> None:
         """Открыть поле заметки у пункта: например, сразу после галочки."""
@@ -832,6 +846,7 @@ class ChecklistPopup(QWidget):
     def _rebuild(self, status: DayStatus) -> None:
         for row in self._rows:
             self._items.removeWidget(row)
+            row.setParent(None)  # сразу вон из панели: иначе до удаления он ещё рисуется
             row.deleteLater()
         self._rows = []
         self._boxes = {}
@@ -848,10 +863,12 @@ class ChecklistPopup(QWidget):
         if not status.items and not status.upcoming:
             empty = QLabel("Nothing here yet. Add a task below.", objectName="meta")
             self._items.addWidget(empty)
+            empty.show()
             self._rows.append(empty)
         if status.upcoming:
             self.section_label = QLabel("SOON", objectName="section")
             self._items.addWidget(self.section_label)
+            self.section_label.show()
             self._rows.append(self.section_label)
             for item in status.upcoming:
                 self._add_row(item, status.day)
@@ -909,6 +926,9 @@ class ChecklistPopup(QWidget):
             self.remove_buttons[key] = remove
         self._add_notes(column, key, item.notes)
         self._items.addWidget(row)
+        # Новый виджет в показанном окне Qt показывает отложенно, в цикле событий.
+        # Размер окна считается сразу после перестройки, поэтому показываем сами.
+        row.show()
         self._rows.append(row)
         self._boxes[key] = box
 
