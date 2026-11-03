@@ -586,7 +586,7 @@ class ChecklistPopup(QWidget):
     note_added = Signal(str, str)
     note_deleted = Signal(int)
     resized = Signal()
-    topic_hours = Signal(str, int)
+    topic_percent = Signal(str, int)
 
     # Отступ заметок слева: под текстом пункта, а не под галочкой.
     NOTE_INDENT = 23
@@ -621,7 +621,7 @@ class ChecklistPopup(QWidget):
         self.topic_edit.returnPressed.connect(self._submit_topic)
         self.topic_edit.hide()
         self._renaming: str | None = None
-        self._hours_for: str | None = None
+        self._percent_for: str | None = None
         self.topic_buttons: dict[str, QToolButton] = {}
         self._topics: list[Topic] = []
         self._topic = ""
@@ -806,8 +806,8 @@ class ChecklistPopup(QWidget):
         daily.setChecked(topic.daily)
         daily.setToolTip("Tasks here repeat daily. Sport, Study and other habits show here")
         daily.toggled.connect(lambda on: self.topic_daily.emit(name, on))
-        label = f"Hours per week: {topic.hours}…" if topic.hours else "Hours per week…"
-        menu.addAction(label, lambda: self.edit_hours(name))
+        label = f"Share of time: {topic.percent}%…" if topic.percent else "Share of time…"
+        menu.addAction(label, lambda: self.edit_percent(name))
         colors = menu.addMenu("Color")
         from clodick.core.tracker import TOPIC_COLORS
 
@@ -831,12 +831,12 @@ class ChecklistPopup(QWidget):
         self.topic_edit.setFocus()
         self.topic_edit.selectAll()
 
-    def edit_hours(self, name: str) -> None:
-        """Поле нормы часов: по ней клодик выбирает план дня."""
+    def edit_percent(self, name: str) -> None:
+        """Поле доли времени в процентах: по ней клодик выбирает план дня."""
         topic = next(t for t in self._topics if t.name == name)
-        self._hours_for = name
-        self.topic_edit.setText(str(topic.hours) if topic.hours else "")
-        self.topic_edit.setPlaceholderText(f"{name}: hours per week, then Enter")
+        self._percent_for = name
+        self.topic_edit.setText(str(topic.percent) if topic.percent else "")
+        self.topic_edit.setPlaceholderText(f"{name}: percent of your time, then Enter")
         self.topic_edit.show()
         self._relayout()
         self.resized.emit()
@@ -845,13 +845,13 @@ class ChecklistPopup(QWidget):
 
     def _submit_topic(self) -> None:
         text = " ".join(self.topic_edit.text().split())
-        renaming, hours_for = self._renaming, self._hours_for
+        renaming, percent_for = self._renaming, self._percent_for
         self.topic_edit.clear()
         self.topic_edit.hide()
-        self._renaming = self._hours_for = None
-        if hours_for is not None:
-            if text.isdigit() and int(text) <= 168:
-                self.topic_hours.emit(hours_for, int(text))
+        self._renaming = self._percent_for = None
+        if percent_for is not None:
+            if text.isdigit() and int(text) <= 100:
+                self.topic_percent.emit(percent_for, int(text))
             else:
                 self._relayout()
                 self.resized.emit()

@@ -34,7 +34,7 @@ the user's Google Sheet.
 Use it to know what the user is working on and to keep the list honest:
 - Look at today() or list_tasks(topic) when the user talks about their plans or a project.
 - Call plan() when the user asks what to do now or what is left. It holds today's three items,
-  and how long each topic with a weekly norm has had no marks. "No marks" is not proof of no
+  and how long each topic with a share of time has had no marks. "No marks" is not proof of no
   work: a job can run without any tick here.
 - Add tasks the user asks for with add_task. Quick syntax works: "maga: report by fri 15:00".
 - Also add a task on your own, without being asked, when the conversation brings up something
@@ -90,8 +90,8 @@ class Desk:
         lines = []
         for topic in topics:
             line = f"- {topic.name}" + (" (every day)" if topic.daily else "")
-            if topic.hours:
-                line += f", {topic.hours} h/week"
+            if topic.percent:
+                line += f", {topic.percent}% of time"
             if topic.aliases:
                 line += ", short names: " + ", ".join(topic.aliases)
             lines.append(line)
@@ -100,7 +100,7 @@ class Desk:
     def plan(self) -> str:
         items = plan.todays_plan(self._tracker, self._state)
         if not items:
-            return "No plan for today: no deadlines, and no topic with a weekly norm is behind."
+            return "No plan for today: no deadlines, and no topic with a share of time is behind."
         lines = ["Today's plan:"]
         for item in items:
             where = f"{item.direction}, " if item.direction else ""
@@ -109,25 +109,21 @@ class Desk:
             lines.append(f"[{mark}] {key}«{item.title}» — {where}{item.why}")
         found = plan.directions(self._tracker)
         if found:
-            lines.append("Weekly norms:")
-            lines += [
-                f"- {d.name}: {d.hours} h/week, no marks for {d.idle_days}d, "
-                f"owed about {d.owed:.0f} h"
-                for d in found
-            ]
+            lines.append("Shares of time:")
+            lines += [f"- {d.name}: {d.percent}%, no marks for {d.idle_days}d" for d in found]
         return "\n".join(lines)
 
     # --- изменения ---
 
-    def set_hours(self, topic: str, hours: int) -> str:
+    def set_percent(self, topic: str, percent: int) -> str:
         found = self._tracker.topic(topic)
         if found is None:
             return f"No topic «{topic}». Topics: {self._topic_names()}."
-        if not 0 <= hours <= 168:
-            return "Not saved: hours must be between 0 and 168."
-        self._tracker.update_topic(found.name, hours=hours)
-        self._changed(f"{found.name}: {hours} h/week")
-        return f"{found.name}: {hours} h/week."
+        if not 0 <= percent <= 100:
+            return "Not saved: percent must be between 0 and 100."
+        self._tracker.update_topic(found.name, percent=percent)
+        self._changed(f"{found.name}: {percent}% of time")
+        return f"{found.name}: {percent}% of time."
 
     def add_task(self, text: str, topic: str = "", daily: bool = False) -> str:
         if topic and self._tracker.topic(topic) is None:
@@ -271,13 +267,13 @@ def build_server(desk: Desk):
     @server.tool()
     def plan() -> str:
         """Today's plan: up to three items chosen from deadlines and topics behind their
-        weekly norm, what is done and what is left. The same plan the pet shows."""
+        share of time, what is done and what is left. The same plan the pet shows."""
         return desk.plan()
 
     @server.tool()
-    def set_hours(topic: str, hours: int) -> str:
-        """Set a topic's weekly norm in hours, 0 removes it. The plan uses these norms."""
-        return desk.set_hours(topic, hours)
+    def set_percent(topic: str, percent: int) -> str:
+        """Set the percent of the user's time for a topic, 0 removes it. The plan uses these."""
+        return desk.set_percent(topic, percent)
 
     @server.tool()
     def list_tasks(topic: str = "") -> str:

@@ -2,7 +2,7 @@
 
 | Лист  | Что в нём |
 |---|---|
-| Topics | Темы: Turkov, Maga, Personal, Daily — имя, короткие имена, цвет, повтор, часы |
+| Topics | Темы: Turkov, Maga, Personal, Daily — имя, короткие имена, цвет, повтор, доля времени |
 | Tasks | Задачи: проект (тема), название, срок, время, повтор, статус, заметка |
 | Log   | Отметки «сделано» по дням: направления, ежедневные и разовые задачи |
 | Notes | Заметки и результаты к пунктам |
@@ -64,15 +64,15 @@ class _SqlTable:
 
 class TopicsTable(_SqlTable):
     tab = "Topics"
-    columns = ("id", "name", "aliases", "color", "repeat", "position", "hours")
+    columns = ("id", "name", "aliases", "color", "repeat", "position", "percent")
 
     def local_rows(self) -> dict[str, Row]:
-        rows = self._all("SELECT id, name, aliases, color, repeat, position, hours FROM topics")
+        rows = self._all("SELECT id, name, aliases, color, repeat, position, percent FROM topics")
         out = {}
         for row in rows:
             data = dict(zip(self.columns, row, strict=True))
             data["position"] = str(data["position"])
-            data["hours"] = str(data["hours"]) if data["hours"] else ""
+            data["percent"] = str(data["percent"]) if data["percent"] else ""
             out[data["id"]] = data
         return out
 
@@ -81,7 +81,7 @@ class TopicsTable(_SqlTable):
             self._run("DELETE FROM topics WHERE id = ?", (row_id,))
             return
         args = (row_id, row["name"], row["aliases"], row["color"], row["repeat"],
-                int(row["position"]), int(row["hours"] or 0))  # fmt: skip
+                int(row["position"]), int(row["percent"] or 0))  # fmt: skip
         self._run(TOPIC_UPSERT, args)
 
     def normalize(self, row: Row, now: datetime) -> Row | None:
@@ -91,8 +91,8 @@ class TopicsTable(_SqlTable):
         row["id"] = row["id"] or new_uid()
         row["repeat"] = "daily" if row["repeat"].casefold() in DAILY_WORDS else ""
         row["position"] = row["position"].strip() if row["position"].strip().isdigit() else "0"
-        hours = row["hours"].strip()
-        row["hours"] = hours if hours.isdigit() and int(hours) > 0 else ""
+        percent = row["percent"].strip()
+        row["percent"] = percent if percent.isdigit() and int(percent) > 0 else ""
         return row
 
 

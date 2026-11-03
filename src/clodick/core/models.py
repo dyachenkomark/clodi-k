@@ -63,7 +63,7 @@ class Topic:
 
     aliases — короткие имена для быстрой записи («мага: отчёт»).
     daily — задачи темы повторяются каждый день, туда же попадают направления из настроек.
-    hours — норма часов в неделю, 0 — без нормы. По ней клодик выбирает план дня.
+    percent — какую долю времени отдавать теме, 0 — без нормы. По ней выбирается план дня.
     """
 
     id: str
@@ -72,7 +72,7 @@ class Topic:
     color: str = ""
     daily: bool = False
     position: int = 0
-    hours: int = 0
+    percent: int = 0
 
 
 def in_topic(category: Category, topic: Topic | None) -> bool:

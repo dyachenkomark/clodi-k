@@ -1,9 +1,9 @@
 """План дня: три дела. Выбирает код, модель только пересказывает.
 
-У темы есть норма часов в неделю. Сколько часов на самом деле ушло, мы не знаем: таймером
-пользуются не всегда. Зато знаем, когда в теме в последний раз было что-то отмечено:
-галочка, заметка или фокус. Отсюда долг: дневная норма × дни без отметок.
-Так тема на 10 часов в неделю всплывает реже темы на 40, но не теряется совсем.
+У темы есть доля времени в процентах. Сколько времени ушло на самом деле, мы не знаем:
+таймером пользуются не всегда. Зато знаем, когда в теме в последний раз было что-то отмечено:
+галочка, заметка или фокус. Отсюда долг: доля темы × дни без отметок.
+Так тема на 10% всплывает реже темы на 40%, но не теряется совсем.
 
 Сроки идут первыми, но занимают не больше двух мест: иначе работа со сроками навсегда
 вытеснит то, у чего сроков не бывает, например языки.
@@ -29,15 +29,16 @@ TITLE_LENGTH = 60
 
 @dataclass(frozen=True)
 class Direction:
-    """Тема с нормой часов и сколько дней в ней ничего не отмечено."""
+    """Тема с долей времени и сколько дней в ней ничего не отмечено."""
 
     name: str
-    hours: int
+    percent: int
     idle_days: int
 
     @property
-    def owed(self) -> float:
-        return self.hours / 7 * self.idle_days
+    def owed(self) -> int:
+        """Долг для сравнения тем между собой. Это не часы и не проценты."""
+        return self.percent * self.idle_days
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class PlanItem:
 
 
 def enabled(tracker: Tracker) -> bool:
-    return any(t.hours > 0 for t in tracker.topics())
+    return any(t.percent > 0 for t in tracker.topics())
 
 
 def directions(tracker: Tracker) -> list[Direction]:
@@ -59,11 +60,11 @@ def directions(tracker: Tracker) -> list[Direction]:
     last = tracker.last_activity(MAX_IDLE_DAYS)
     found = []
     for topic in tracker.topics():
-        if topic.hours <= 0:
+        if topic.percent <= 0:
             continue
         seen = last.get(topic.name.casefold())
         idle = MAX_IDLE_DAYS if seen is None else (today - seen).days
-        found.append(Direction(topic.name, topic.hours, idle))
+        found.append(Direction(topic.name, topic.percent, idle))
     return sorted(found, key=lambda d: -d.owed)
 
 

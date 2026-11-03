@@ -23,9 +23,9 @@ class World:
         self.state = StateStore(repo.conn)
         self.repo = repo
 
-    def norm(self, name, hours):
+    def norm(self, name, percent):
         self.tracker.add_topic(name)
-        self.tracker.update_topic(name, hours=hours)
+        self.tracker.update_topic(name, percent=percent)
 
     def touch(self, task, days_ago):
         """Заметка к задаче days_ago дней назад."""
@@ -47,8 +47,8 @@ def test_topic_behind_its_norm_comes_first(world):
     world.norm("Languages", 10)
     turkov = world.tracker.add_from_text("portal", topic="Turkov")
     english = world.tracker.add_from_text("english lesson", topic="Languages")
-    world.touch(turkov, 1)  # долг 40/7 ≈ 5.7 часа
-    world.touch(english, 4)  # долг 10/7*4 ≈ 5.7, чуть меньше не важно: обе в плане
+    world.touch(turkov, 1)  # долг 40×1
+    world.touch(english, 4)  # долг 10×4: столько же, обе в плане
     items = world.plan()
     assert {i.title for i in items} == {"portal", "english lesson"}
     assert next(i for i in items if i.title == "english lesson").why == "no marks for 4 days"
@@ -154,23 +154,23 @@ def test_config_habit_can_name_its_topic(tmp_path):
     assert load_config(path).categories[0].project == "IT"
 
 
-def test_hours_travel_through_the_sheet(world, repo):
+def test_percent_travel_through_the_sheet(world, repo):
     world.norm("Turkov", 40)
     world.tracker.add_topic("Personal")
     sheet = FakeSheet()
     sync_all(repo, sheet, NOW)
-    assert sheet.row("Topics", name="Turkov")["hours"] == "40"
-    assert sheet.row("Topics", name="Personal")["hours"] == ""
+    assert sheet.row("Topics", name="Turkov")["percent"] == "40"
+    assert sheet.row("Topics", name="Personal")["percent"] == ""
 
 
-def test_mcp_plan_and_hours(world):
+def test_mcp_plan_and_percent(world):
     desk = Desk(world.tracker, world.state)
     world.tracker.add_topic("IT")
     assert "No plan for today" in desk.plan()
-    assert desk.set_hours("nope", 5).startswith("No topic")
-    assert "between 0 and 168" in desk.set_hours("IT", 500)
-    assert desk.set_hours("it", 20) == "IT: 20 h/week."
-    assert "- IT, 20 h/week" in desk.list_topics()
+    assert desk.set_percent("nope", 5).startswith("No topic")
+    assert "between 0 and 100" in desk.set_percent("IT", 500)
+    assert desk.set_percent("it", 20) == "IT: 20% of time."
+    assert "- IT, 20% of time" in desk.list_topics()
     text = desk.plan()
     assert "«IT: pick a task» — IT, no marks for 7+ days" in text
-    assert "- IT: 20 h/week, no marks for 7d, owed about 20 h" in text
+    assert "- IT: 20%, no marks for 7d" in text

@@ -116,6 +116,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE topics ADD COLUMN hours INTEGER NOT NULL DEFAULT 0;
     """,
+    # 9: это не часы, а доля времени в процентах.
+    """
+    ALTER TABLE topics RENAME COLUMN hours TO percent;
+    """,
 ]
 
 

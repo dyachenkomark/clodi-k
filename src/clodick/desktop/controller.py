@@ -275,7 +275,7 @@ class DesktopApp(QObject):
         self.checklist.topic_renamed.connect(self._rename_topic)
         self.checklist.topic_removed.connect(self._remove_topic)
         self.checklist.topic_daily.connect(lambda name, on: self._change_topic(name, daily=on))
-        self.checklist.topic_hours.connect(lambda name, h: self._change_topic(name, hours=h))
+        self.checklist.topic_percent.connect(lambda name, h: self._change_topic(name, percent=h))
         self.checklist.topic_color.connect(
             lambda name, color: self._change_topic(name, color=color)
         )
@@ -514,7 +514,7 @@ class DesktopApp(QObject):
         self.checklist.set_status(self._tracker.status(), self._ram, self._tracker.focus_count())
 
     def _show_plan(self) -> list[plan.PlanItem]:
-        """План дня в чек-листе. Без норм часов плана нет: чек-лист как обычно."""
+        """План дня в чек-листе. Без долей времени плана нет: чек-лист как обычно."""
         items = plan.todays_plan(self._tracker, self._state) if plan.enabled(self._tracker) else []
         self.checklist.set_plan([i.key for i in items if i.key], plan.plan_line(items))
         return items

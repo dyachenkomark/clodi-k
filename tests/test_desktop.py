@@ -870,7 +870,7 @@ def test_plan_in_the_checklist_and_said_once_a_morning(make_desktop):
     assert "★" not in checklist.meta_labels[task.key].text()
     checklist.hide()
 
-    tracker.update_topic("Maga", hours=30)
+    tracker.update_topic("Maga", percent=30)
     desktop.bubble.hide()
     desktop.check_reminders_now()
     assert desktop.bubble.isVisible() and desktop.bubble.text.startswith("Plan 0/1. Left: report")
@@ -902,23 +902,23 @@ def test_checklist_keeps_the_order_of_the_plan(make_desktop):
     )
 
 
-def test_hours_are_set_from_the_topic_menu(make_desktop):
+def test_percent_are_set_from_the_topic_menu(make_desktop):
     desktop, tracker, _ = make_desktop()
     tracker.add_topic("Maga")
     desktop.open_checklist()
     checklist = desktop.checklist
-    checklist.edit_hours("Maga")
+    checklist.edit_percent("Maga")
     assert checklist.topic_edit.isVisible()
     checklist.topic_edit.setText("много")
     checklist._submit_topic()
-    assert tracker.topic("Maga").hours == 0
-    checklist.edit_hours("Maga")
+    assert tracker.topic("Maga").percent == 0
+    checklist.edit_percent("Maga")
     checklist.topic_edit.setText("30")
     checklist._submit_topic()
-    assert tracker.topic("Maga").hours == 30
+    assert tracker.topic("Maga").percent == 30
     assert not checklist.topic_edit.isVisible()
     labels = [a.text() for a in checklist.topic_menu("Maga").actions()]
-    assert "Hours per week: 30…" in labels
+    assert "Share of time: 30%…" in labels
 
 
 def test_pet_notices_changes_made_by_claude(make_desktop):
